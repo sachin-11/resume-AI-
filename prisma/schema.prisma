@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String             @id @default(cuid())
+  name             String?
+  email            String             @unique
+  password         String
+  targetRole       String?
+  techStack        String[]
+  experienceYears  Int?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  resumes          Resume[]
+  interviewSessions InterviewSession[]
+  campaigns        InterviewCampaign[]
+}
+
+model Resume {
+  id              String    @id @default(cuid())
+  userId          String
+  fileName        String
+  fileType        String
+  rawText         String
+  parsedData      Json?
+  analysisReport  Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interviewSessions InterviewSession[]
+}
+
+model InterviewSession {
+  id             String     @id @default(cuid())
+  userId         String
+  resumeId       String?
+  title          String
+  role           String
+  difficulty     String
+  roundType      String
+  status         String     @default("pending")
+  totalQuestions Int        @default(0)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resume         Resume?    @relation(fields: [resumeId], references: [id])
+  questions      Question[]
+  feedbackReport FeedbackReport?
+}
+
+model Question {
+  id          String           @id @default(cuid())
+  sessionId   String
+  text        String
+  type        String
+  orderIndex  Int
+  createdAt   DateTime         @default(now())
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  answers     Answer[]
+}
+
+model Answer {
+  id         String   @id @default(cuid())
+  questionId String
+  text       String
+  createdAt  DateTime @default(now())
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+model FeedbackReport {
+  id                  String           @id @default(cuid())
+  sessionId           String           @unique
+  overallScore        Int
+  technicalScore      Int
+  communicationScore  Int
+  confidenceScore     Int
+  strengths           String[]
+  weakAreas           String[]
+  betterAnswers       Json
+  improvementRoadmap  String[]
+  summary             String
+  createdAt           DateTime         @default(now())
+  session             InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+// ── Bulk Interview Campaign ──────────────────────────────────────
+
+model InterviewCampaign {
+  id            String             @id @default(cuid())
+  userId        String
+  title         String
+  role          String
+  difficulty    String
+  roundType     String
+  questionCount Int                @default(5)
+  description   String?
+  status        String             @default("active") // active | closed
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invites       CandidateInvite[]
+}
+
+model CandidateInvite {
+  id           String             @id @default(cuid())
+  campaignId   String
+  email        String
+  name         String?
+  token        String             @unique @default(cuid())
+  status       String             @default("pending") // pending | started | completed
+  emailSent    Boolean            @default(false)
+  sessionId    String?            @unique
+  createdAt    DateTime           @default(now())
+  campaign     InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
