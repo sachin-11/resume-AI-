@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
       .map((q) => ({
         question: q.text,
         answer: q.answers[0].text,
+        candidateAnswer: q.answers[0].text,
       }));
 
     let feedback: FeedbackReport;

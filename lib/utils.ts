@@ -13,9 +13,11 @@ export function formatDate(date: Date | string): string {
   });
 }
 
-export function formatRelativeTime(date: Date | string): string {
+export function formatRelativeTime(date: Date | string | null | undefined): string {
+  if (!date) return "Never";
   const now = new Date();
   const then = new Date(date);
+  if (isNaN(then.getTime())) return "Never";
   const diff = now.getTime() - then.getTime();
 
   const minutes = Math.floor(diff / 60000);

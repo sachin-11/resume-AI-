@@ -24,6 +24,8 @@ export const interviewSetupSchema = z.object({
   difficulty: z.enum(["beginner", "intermediate", "advanced"]),
   roundType: z.enum(["hr", "technical", "behavioral", "system_design"]),
   questionCount: z.number().min(3).max(15).default(5),
+  customQuestionIds: z.array(z.string()).optional(),
+  persona: z.string().default("friendly"),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

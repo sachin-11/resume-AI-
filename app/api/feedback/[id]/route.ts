@@ -22,7 +22,16 @@ export async function GET(
       },
       include: {
         session: {
-          select: { title: true, role: true, roundType: true, difficulty: true, createdAt: true },
+          select: {
+            title: true, role: true, roundType: true, difficulty: true, createdAt: true,
+            questions: {
+              orderBy: { orderIndex: "asc" },
+              select: {
+                id: true, text: true, orderIndex: true, type: true,
+                answers: { select: { text: true }, orderBy: { createdAt: "asc" }, take: 1 },
+              },
+            },
+          },
         },
       },
     });

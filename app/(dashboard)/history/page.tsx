@@ -1,10 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { MessageSquare, Loader2, ArrowRight, BarChart3 } from "lucide-react";
+import { MessageSquare, Loader2, ArrowRight, BarChart3, Search, X } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getDifficultyColor, getRoundTypeLabel, formatRelativeTime, getScoreColor } from "@/lib/utils";
 
 interface Session {
@@ -22,6 +24,10 @@ interface Session {
 export default function HistoryPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterDifficulty, setFilterDifficulty] = useState("all");
+  const [filterRound, setFilterRound] = useState("all");
 
   useEffect(() => {
     fetch("/api/interview/list")
@@ -29,6 +35,25 @@ export default function HistoryPage() {
       .then((d) => setSessions(d.sessions ?? []))
       .finally(() => setLoading(false));
   }, []);
+
+  const filtered = useMemo(() => {
+    return sessions.filter((s) => {
+      if (search && !s.title.toLowerCase().includes(search.toLowerCase()) && !s.role.toLowerCase().includes(search.toLowerCase())) return false;
+      if (filterStatus !== "all" && s.status !== filterStatus) return false;
+      if (filterDifficulty !== "all" && s.difficulty !== filterDifficulty) return false;
+      if (filterRound !== "all" && s.roundType !== filterRound) return false;
+      return true;
+    });
+  }, [sessions, search, filterStatus, filterDifficulty, filterRound]);
+
+  const hasFilters = search || filterStatus !== "all" || filterDifficulty !== "all" || filterRound !== "all";
+
+  function clearFilters() {
+    setSearch("");
+    setFilterStatus("all");
+    setFilterDifficulty("all");
+    setFilterRound("all");
+  }
 
   if (loading) {
     return (
@@ -50,6 +75,53 @@ export default function HistoryPage() {
         </Button>
       </div>
 
+      {sessions.length > 0 && (
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search by title or role…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 h-9 text-sm"
+            />
+          </div>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-[130px] h-9 text-sm"><SelectValue placeholder="Status" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filterDifficulty} onValueChange={setFilterDifficulty}>
+            <SelectTrigger className="w-[140px] h-9 text-sm"><SelectValue placeholder="Difficulty" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Levels</SelectItem>
+              <SelectItem value="beginner">Beginner</SelectItem>
+              <SelectItem value="intermediate">Intermediate</SelectItem>
+              <SelectItem value="advanced">Advanced</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filterRound} onValueChange={setFilterRound}>
+            <SelectTrigger className="w-[150px] h-9 text-sm"><SelectValue placeholder="Round" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Rounds</SelectItem>
+              <SelectItem value="technical">Technical</SelectItem>
+              <SelectItem value="hr">HR</SelectItem>
+              <SelectItem value="behavioral">Behavioral</SelectItem>
+              <SelectItem value="system_design">System Design</SelectItem>
+            </SelectContent>
+          </Select>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 text-muted-foreground">
+              <X className="h-3.5 w-3.5 mr-1" /> Clear
+            </Button>
+          )}
+        </div>
+      )}
+
       {sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-center">
           <MessageSquare className="h-12 w-12 text-muted-foreground/30 mb-4" />
@@ -57,9 +129,14 @@ export default function HistoryPage() {
           <p className="text-muted-foreground text-sm mt-1 mb-4">Start your first mock interview</p>
           <Button asChild><Link href="/interview/setup">Start Interview</Link></Button>
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-48 text-center">
+          <p className="text-muted-foreground text-sm">No sessions match your filters</p>
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="mt-2">Clear filters</Button>
+        </div>
       ) : (
         <div className="space-y-3">
-          {sessions.map((s) => (
+          {filtered.map((s) => (
             <Card key={s.id} className="hover:border-violet-500/30 transition-colors">
               <CardContent className="p-4">
                 <div className="flex items-center gap-4">
@@ -79,7 +156,7 @@ export default function HistoryPage() {
                       <span>·</span>
                       <span>{formatRelativeTime(s.createdAt)}</span>
                       <span>·</span>
-                      <span className={`capitalize ${s.status === "completed" ? "text-green-500" : "text-yellow-500"}`}>
+                      <span className={`capitalize ${s.status === "completed" ? "text-green-500" : s.status === "active" ? "text-blue-400" : "text-yellow-500"}`}>
                         {s.status}
                       </span>
                     </div>
@@ -111,6 +188,11 @@ export default function HistoryPage() {
               </CardContent>
             </Card>
           ))}
+          {filtered.length < sessions.length && (
+            <p className="text-center text-xs text-muted-foreground pt-1">
+              Showing {filtered.length} of {sessions.length} sessions
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -1,5 +1,7 @@
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+// pdf-parse uses default export only
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require("pdf-parse") as (buffer: Buffer) => Promise<{ text: string }>;
 
 export async function extractTextFromFile(
   buffer: Buffer,
@@ -22,10 +24,8 @@ export async function extractTextFromFile(
 
 async function extractFromPDF(buffer: Buffer): Promise<string> {
   try {
-    const parser = new PDFParse({ data: buffer });
-    const result = await parser.getText();
+    const result = await pdfParse(buffer);
     const text = result.text?.trim() ?? "";
-    await parser.destroy();
     if (!text) throw new Error("No text could be extracted from this PDF");
     return text;
   } catch (err) {

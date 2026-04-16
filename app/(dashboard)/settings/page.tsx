@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [newTech, setNewTech] = useState("");
 
   useEffect(() => {
@@ -34,8 +35,9 @@ export default function SettingsPage() {
   async function handleSave() {
     if (!settings) return;
     setSaving(true);
+    setSaveError("");
 
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -47,8 +49,12 @@ export default function SettingsPage() {
     });
 
     setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    if (res.ok) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } else {
+      setSaveError("Failed to save. Please try again.");
+    }
   }
 
   function addTech() {
@@ -174,6 +180,7 @@ export default function SettingsPage() {
         )}
         {saved ? "Saved!" : "Save Changes"}
       </Button>
+      {saveError && <p className="text-center text-sm text-red-400">{saveError}</p>}
     </div>
   );
 }

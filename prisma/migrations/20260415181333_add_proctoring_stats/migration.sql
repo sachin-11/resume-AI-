@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "InterviewSession" ADD COLUMN     "copyPasteCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "lookingAwayCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "multipleFacesCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "noFaceCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "noiseCount" INTEGER NOT NULL DEFAULT 0;

@@ -15,11 +15,44 @@ model User {
   targetRole       String?
   techStack        String[]
   experienceYears  Int?
+  role             String             @default("admin")  // admin | recruiter | viewer
+  orgId            String?
+  // Subscription
+  plan             String             @default("free")   // free | pro | enterprise
+  stripeCustomerId String?            @unique
+  stripeSubId      String?            @unique
+  planExpiresAt    DateTime?
+  interviewsThisMonth Int             @default(0)
+  monthResetAt     DateTime?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
   resumes          Resume[]
   interviewSessions InterviewSession[]
   campaigns        InterviewCampaign[]
+  ownedOrg         Organization?
+  teamMembership   TeamMember?
+  questionBank     QuestionBank[]
+  webhooks         WebhookConfig[]
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  ownerId     String       @unique
+  createdAt   DateTime     @default(now())
+  owner       User         @relation(fields: [ownerId], references: [id])
+  members     TeamMember[]
+}
+
+model TeamMember {
+  id        String       @id @default(cuid())
+  orgId     String
+  userId    String       @unique
+  role      String       @default("recruiter")  // recruiter | viewer
+  invitedBy String
+  createdAt DateTime     @default(now())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Resume {
@@ -37,21 +70,33 @@ model Resume {
 }
 
 model InterviewSession {
-  id             String     @id @default(cuid())
-  userId         String
-  resumeId       String?
-  title          String
-  role           String
-  difficulty     String
-  roundType      String
-  status         String     @default("pending")
-  totalQuestions Int        @default(0)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  resume         Resume?    @relation(fields: [resumeId], references: [id])
-  questions      Question[]
-  feedbackReport FeedbackReport?
+  id                  String     @id @default(cuid())
+  userId              String
+  resumeId            String?
+  title               String
+  role                String
+  difficulty          String
+  roundType           String
+  status              String     @default("pending")
+  totalQuestions      Int        @default(0)
+  tabSwitchCount      Int        @default(0)
+  audioKey            String?
+  language            String     @default("en")
+  persona             String     @default("friendly")
+  transcript          String?    // Whisper auto-transcription
+  integrityFlag       String     @default("clean")  // clean | warning | suspicious
+  // Proctoring stats
+  multipleFacesCount  Int        @default(0)
+  noFaceCount         Int        @default(0)
+  lookingAwayCount    Int        @default(0)
+  noiseCount          Int        @default(0)
+  copyPasteCount      Int        @default(0)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resume              Resume?    @relation(fields: [resumeId], references: [id])
+  questions           Question[]
+  feedbackReport      FeedbackReport?
 }
 
 model Question {
@@ -71,6 +116,34 @@ model Answer {
   text       String
   createdAt  DateTime @default(now())
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+// ── Webhook Configuration ────────────────────────────────────────
+model WebhookConfig {
+  id               String   @id @default(cuid())
+  userId           String
+  name             String
+  type             String   // slack | greenhouse | lever | workday | custom
+  url              String   // webhook URL
+  secret           String?  // optional signing secret
+  events           String[] // interview_completed | shortlisted | score_threshold
+  scoreThreshold   Int?     // auto-shortlist if score >= this
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+model QuestionBank {
+  id         String   @id @default(cuid())
+  userId     String
+  text       String
+  category   String   // technical | hr | behavioral | system_design | dsa
+  difficulty String   @default("intermediate")
+  tags       String[]
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model FeedbackReport {
@@ -100,22 +173,41 @@ model InterviewCampaign {
   roundType     String
   questionCount Int                @default(5)
   description   String?
-  status        String             @default("active") // active | closed
+  status        String             @default("active")
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   invites       CandidateInvite[]
+  slots         InterviewSlot[]
 }
 
 model CandidateInvite {
-  id           String             @id @default(cuid())
-  campaignId   String
-  email        String
-  name         String?
-  token        String             @unique @default(cuid())
-  status       String             @default("pending") // pending | started | completed
-  emailSent    Boolean            @default(false)
-  sessionId    String?            @unique
-  createdAt    DateTime           @default(now())
-  campaign     InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  id             String             @id @default(cuid())
+  campaignId     String
+  email          String
+  name           String?
+  token          String             @unique @default(cuid())
+  status         String             @default("pending")
+  emailSent      Boolean            @default(false)
+  reminderSent   Boolean            @default(false)
+  sessionId      String?            @unique
+  photoUrl       String?
+  scheduledAt    DateTime?
+  slotId         String?
+  portalPassword String?
+  createdAt      DateTime           @default(now())
+  campaign       InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  slot           InterviewSlot?     @relation(fields: [slotId], references: [id])
+}
+
+// ── Interview Scheduling ─────────────────────────────────────────
+model InterviewSlot {
+  id          String             @id @default(cuid())
+  campaignId  String
+  startsAt    DateTime
+  durationMin Int                @default(30)
+  isBooked    Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  campaign    InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  invites     CandidateInvite[]
 }

@@ -5,12 +5,12 @@ import { db } from "@/lib/db";
 import { z } from "zod";
 
 const createSchema = z.object({
-  title: z.string().min(1),
-  role: z.string().min(1),
+  title: z.string().min(1).max(100),
+  role: z.string().min(1).max(100),
   difficulty: z.enum(["beginner", "intermediate", "advanced"]),
   roundType: z.enum(["hr", "technical", "behavioral", "system_design"]),
   questionCount: z.number().min(3).max(15).default(5),
-  description: z.string().optional(),
+  description: z.string().max(300).optional(),
 });
 
 export async function GET() {

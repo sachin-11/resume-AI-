@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { sendInterviewInvite } from "@/lib/mailer";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 
 const inviteSchema = z.object({
   candidates: z.array(z.object({
@@ -40,13 +41,12 @@ export async function POST(
 
   for (const candidate of candidates) {
     try {
-      // Check if already invited
+      // If already invited, delete old invite and create fresh one
       const existing = await db.candidateInvite.findFirst({
         where: { campaignId, email: candidate.email },
       });
       if (existing) {
-        errors.push({ email: candidate.email, error: "Already invited" });
-        continue;
+        await db.candidateInvite.delete({ where: { id: existing.id } });
       }
 
       const invite = await db.candidateInvite.create({
@@ -54,6 +54,7 @@ export async function POST(
           campaignId,
           email: candidate.email,
           name: candidate.name ?? "",
+          portalPassword: await bcrypt.hash(Math.random().toString(36).slice(-8), 10),
         },
       });
 
@@ -104,17 +105,40 @@ export async function GET(
     orderBy: { createdAt: "desc" },
   });
 
-  // Fetch scores for completed invites
+  // Fetch scores + tabSwitchCount for completed invites
   const invitesWithScores = await Promise.all(
     invites.map(async (inv) => {
       if (inv.sessionId) {
+        const sessionData = await db.interviewSession.findUnique({
+          where: { id: inv.sessionId },
+          select: {
+            tabSwitchCount: true, audioKey: true,
+            multipleFacesCount: true, noFaceCount: true,
+            lookingAwayCount: true, noiseCount: true, copyPasteCount: true,
+            integrityFlag: true,
+          },
+        });
         const feedback = await db.feedbackReport.findUnique({
           where: { sessionId: inv.sessionId },
           select: { overallScore: true },
         });
-        return { ...inv, score: feedback?.overallScore ?? null };
+        return {
+          ...inv,
+          score: feedback?.overallScore ?? null,
+          tabSwitchCount: sessionData?.tabSwitchCount ?? 0,
+          hasAudio: !!sessionData?.audioKey,
+          sessionId: inv.sessionId,
+          integrityFlag: sessionData?.integrityFlag ?? "clean",
+          proctoring: {
+            multipleFaces: sessionData?.multipleFacesCount ?? 0,
+            noFace: sessionData?.noFaceCount ?? 0,
+            lookingAway: sessionData?.lookingAwayCount ?? 0,
+            noise: sessionData?.noiseCount ?? 0,
+            copyPaste: sessionData?.copyPasteCount ?? 0,
+          },
+        };
       }
-      return { ...inv, score: null };
+      return { ...inv, score: null, tabSwitchCount: 0, hasAudio: false };
     })
   );
 

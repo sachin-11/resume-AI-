@@ -42,10 +42,12 @@ export async function GET(
 
 // POST — start the interview session for this invite
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
+  const body = await req.json().catch(() => ({}));
+  const language = body.language ?? "en";
 
   const invite = await db.candidateInvite.findUnique({
     where: { token },
@@ -66,7 +68,7 @@ export async function POST(
 
   const { campaign } = invite;
 
-  // Generate questions
+  // Generate questions with language
   let questions: GeneratedQuestion[];
   if (!process.env.GROQ_API_KEY) {
     questions = MOCK_QUESTIONS[campaign.roundType] ?? MOCK_QUESTIONS.technical;
@@ -79,22 +81,24 @@ export async function POST(
         difficulty: campaign.difficulty,
         roundType: campaign.roundType,
         count: campaign.questionCount,
+        language,
       })
     );
     const parsed = safeJsonParse<GeneratedQuestion[]>(raw, MOCK_QUESTIONS.technical);
     questions = parsed.map((q, i) => ({ ...q, orderIndex: i + 1 }));
   }
 
-  // Create interview session (no userId — public candidate)
+  // Create interview session
   const interviewSession = await db.interviewSession.create({
     data: {
-      userId: campaign.userId, // owned by the campaign creator
+      userId: campaign.userId,
       title: `${campaign.role} — ${invite.name ?? invite.email}`,
       role: campaign.role,
       difficulty: campaign.difficulty,
       roundType: campaign.roundType,
       totalQuestions: questions.length,
       status: "active",
+      language,
       questions: {
         create: questions.map((q) => ({
           text: q.text,

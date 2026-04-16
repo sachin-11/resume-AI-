@@ -22,7 +22,7 @@ interface FeedbackData {
   confidenceScore: number;
   strengths: string[];
   weakAreas: string[];
-  betterAnswers: Array<{ question: string; improvedAnswer: string }>;
+  betterAnswers: Array<{ question: string; improvedAnswer: string; candidateAnswer?: string }>;
   improvementRoadmap: string[];
   summary: string;
   session: {
@@ -31,6 +31,12 @@ interface FeedbackData {
     roundType: string;
     difficulty: string;
     createdAt: string;
+    questions: Array<{
+      id: string;
+      text: string;
+      orderIndex: number;
+      answers: Array<{ text: string }>;
+    }>;
   };
 }
 
@@ -261,6 +267,30 @@ export default function FeedbackPage() {
         </Card>
       </div>
 
+      {/* ── Your Responses ── */}
+      {(feedback.session.questions?.length ?? 0) > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-blue-400" /> Your Responses
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {feedback.session.questions
+              .filter((q) => q.answers?.[0]?.text)
+              .map((q, i) => (
+                <div key={q.id} className="rounded-lg border border-border p-4 space-y-2">
+                  <p className="text-sm font-semibold text-foreground">Q{i + 1}: {q.text}</p>
+                  <div className="border-l-2 border-blue-500/50 pl-3">
+                    <p className="text-xs text-blue-400 font-medium mb-1">Your Answer:</p>
+                    <p className="text-sm text-muted-foreground">{q.answers[0].text}</p>
+                  </div>
+                </div>
+              ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Better Answers ── */}
       {feedback.betterAnswers?.length > 0 && (
         <Card>
@@ -270,15 +300,36 @@ export default function FeedbackPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {feedback.betterAnswers.map((item, i) => (
-              <div key={i} className="rounded-lg border border-border p-4 space-y-2">
-                <p className="text-sm font-medium text-muted-foreground">Q: {item.question}</p>
-                <div className="border-l-2 border-violet-500 pl-3">
-                  <p className="text-xs text-violet-400 font-medium mb-1">Better Answer:</p>
-                  <p className="text-sm text-muted-foreground">{item.improvedAnswer}</p>
+            {feedback.betterAnswers.map((item, i) => {
+              // Match by question text similarity, fallback to index
+              const questions = feedback.session.questions ?? [];
+              const matched = questions.find(
+                (q) => q.text.trim().toLowerCase() === item.question.trim().toLowerCase()
+              ) ?? questions[i];
+              const actualQuestion = matched?.text ?? item.question;
+              // Prefer answer from DB (session questions), fallback to betterAnswers.candidateAnswer
+              const userAnswer = matched?.answers?.[0]?.text ?? item.candidateAnswer;
+              return (
+                <div key={i} className="rounded-lg border border-border p-4 space-y-3">
+                  {/* Question */}
+                  <p className="text-sm font-semibold text-foreground">
+                    Q{i + 1}: {actualQuestion}
+                  </p>
+                  {/* User's answer */}
+                  {userAnswer && (
+                    <div className="border-l-2 border-muted pl-3">
+                      <p className="text-xs text-muted-foreground font-medium mb-1">Your Answer:</p>
+                      <p className="text-sm text-muted-foreground">{userAnswer}</p>
+                    </div>
+                  )}
+                  {/* Better answer */}
+                  <div className="border-l-2 border-violet-500 pl-3">
+                    <p className="text-xs text-violet-400 font-medium mb-1">Better Answer:</p>
+                    <p className="text-sm text-muted-foreground">{item.improvedAnswer}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
       )}

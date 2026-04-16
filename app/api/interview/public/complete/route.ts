@@ -5,9 +5,15 @@ import { FEEDBACK_SYSTEM, feedbackPrompt } from "@/lib/prompts";
 import { safeJsonParse } from "@/lib/utils";
 import { FeedbackReport } from "@/types";
 import { MOCK_FEEDBACK } from "@/lib/mockData";
+import { sendRecruiterAlert, sendScoreReport } from "@/lib/mailer";
+import { dispatchWebhooks } from "@/lib/webhooks";
+import type { WebhookPayload } from "@/lib/webhooks";
+import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
 
 // Public endpoint — no auth required (for candidate invite sessions)
 export async function POST(req: NextRequest) {
+  const rl = rateLimit(getIP(req), RATE_LIMITS.publicComplete);
+  if (!rl.success) return rateLimitResponse(rl);
   try {
     // sendBeacon sends as text/plain, fetch sends as application/json
     let body: { sessionId?: string; token?: string; action?: string };
@@ -76,7 +82,7 @@ export async function POST(req: NextRequest) {
     let feedback: FeedbackReport = MOCK_FEEDBACK;
 
     if (process.env.GROQ_API_KEY && qa.length > 0) {
-      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(qa));
+      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(qa, interviewSession.language ?? "en"));
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 
@@ -94,6 +100,44 @@ export async function POST(req: NextRequest) {
         summary: feedback.summary,
       },
     });
+
+    // ── Send emails (non-blocking) ────────────────────────────
+    const invite = await db.candidateInvite.findFirst({
+      where: { sessionId },
+      include: { campaign: { include: { user: true } } },
+    });
+
+    if (invite && process.env.SMTP_USER && process.env.SMTP_PASS) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
+      // Recruiter alert
+      if (invite.campaign?.user?.email) {
+        sendRecruiterAlert({
+          to: invite.campaign.user.email,
+          recruiterName: invite.campaign.user.name ?? "",
+          candidateName: invite.name ?? "",
+          candidateEmail: invite.email,
+          role: invite.campaign.role,
+          overallScore: feedback.overallScore,
+          tabSwitchCount: interviewSession.tabSwitchCount ?? 0,
+          dashboardUrl: `${appUrl}/campaigns`,
+        }).catch((e) => console.error("[RECRUITER_ALERT]", e));
+      }
+
+      // Score report to candidate
+      sendScoreReport({
+        to: invite.email,
+        candidateName: invite.name ?? "",
+        role: invite.campaign.role,
+        overallScore: feedback.overallScore,
+        technicalScore: feedback.technicalScore,
+        communicationScore: feedback.communicationScore,
+        confidenceScore: feedback.confidenceScore,
+        strengths: feedback.strengths,
+        weakAreas: feedback.weakAreas,
+        summary: feedback.summary,
+      }).catch((e) => console.error("[SCORE_REPORT]", e));
+    }
 
     return NextResponse.json({ success: true });
   } catch (err) {

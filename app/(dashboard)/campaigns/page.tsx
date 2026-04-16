@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Plus, Users, Link2, Mail, CheckCircle, Clock, Loader2, ChevronRight, Copy, Check } from "lucide-react";
+import { Plus, Users, Link2, Mail, CheckCircle, Clock, Loader2, ChevronRight, Copy, Check, Trash2, AlertCircle, Calendar, X, Download, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,29 +8,56 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatDate, getDifficultyColor, getRoundTypeLabel, getScoreColor } from "@/lib/utils";
+import { generateCandidatePDF } from "@/lib/pdf-export";
 
 interface Campaign {
-  id: string;
-  title: string;
-  role: string;
-  difficulty: string;
-  roundType: string;
-  questionCount: number;
-  status: string;
-  createdAt: string;
-  _count: { invites: number };
-  invites: Array<{ status: string }>;
+  id: string; title: string; role: string; difficulty: string;
+  roundType: string; questionCount: number; status: string; createdAt: string;
+  _count: { invites: number }; invites: Array<{ status: string }>;
 }
 
 interface Invite {
-  id: string;
-  email: string;
-  name: string;
-  status: string;
-  emailSent: boolean;
-  token: string;
-  score: number | null;
-  createdAt: string;
+  id: string; email: string; name: string; status: string;
+  emailSent: boolean; token: string; score: number | null;
+  createdAt: string; photoUrl: string | null; tabSwitchCount: number;
+  hasAudio: boolean; sessionId: string | null;
+  integrityFlag?: "clean" | "warning" | "suspicious";
+  proctoring?: {
+    multipleFaces: number; noFace: number; lookingAway: number;
+    noise: number; copyPaste: number;
+  };
+}
+
+interface Slot {
+  id: string; startsAt: string; durationMin: number; isBooked: boolean;
+}
+
+// ── Bulk Email Button ────────────────────────────────────────────
+function BulkEmailButton({ campaignId, completedCount }: { campaignId: string; completedCount: number }) {
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ sent: number; failed: number } | null>(null);
+
+  async function handleBulkEmail() {
+    if (!completedCount || !confirm(`Send feedback emails to all ${completedCount} completed candidates?`)) return;
+    setSending(true);
+    const res = await fetch(`/api/campaigns/${campaignId}/bulk-email`, { method: "POST" });
+    const data = await res.json();
+    setResult(data);
+    setSending(false);
+    setTimeout(() => setResult(null), 4000);
+  }
+
+  if (result) return (
+    <span className="text-xs text-green-400">✓ {result.sent} emails sent{result.failed > 0 ? `, ${result.failed} failed` : ""}</span>
+  );
+
+  return (
+    <button onClick={handleBulkEmail} disabled={sending || completedCount === 0}
+      className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors disabled:opacity-40">
+      {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+      Bulk Email ({completedCount})
+    </button>
+  );
 }
 
 export default function CampaignsPage() {
@@ -51,11 +78,27 @@ export default function CampaignsPage() {
   const [creating, setCreating] = useState(false);
 
   // Invite form
-  const [emailsRaw, setEmailsRaw] = useState("");
+  const [emailChips, setEmailChips] = useState<string[]>([]);
+  const [emailInput, setEmailInput] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [sendEmail, setSendEmail] = useState(true);
   const [inviting, setInviting] = useState(false);
   const [inviteResults, setInviteResults] = useState<Array<{ email: string; link: string }>>([]);
+  const [inviteErrors, setInviteErrors] = useState<Array<{ email: string; error: string }>>([]);
+  const [deletingId, setDeletingId] = useState("");
+  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
+  const [audioLoading, setAudioLoading] = useState<Record<string, boolean>>({});
+  const [transcripts, setTranscripts] = useState<Record<string, string>>({});
+  const [transcriptLoading, setTranscriptLoading] = useState<Record<string, boolean>>({});
+
+  // Slots state
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [showSlots, setShowSlots] = useState(false);
+  const [newSlotDate, setNewSlotDate] = useState("");
+  const [newSlotTime, setNewSlotTime] = useState("");
+  const [newSlotDuration, setNewSlotDuration] = useState(30);
+  const [addingSlot, setAddingSlot] = useState(false);
+  const [deletingSlotId, setDeletingSlotId] = useState("");
 
   useEffect(() => {
     fetch("/api/campaigns")
@@ -75,6 +118,8 @@ export default function CampaignsPage() {
     setSelected(campaign);
     setInvitesLoading(true);
     setInviteResults([]);
+    setShowSlots(false);
+    setSlots([]);
     try {
       const res = await fetch(`/api/campaigns/${campaign.id}/invites`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -110,9 +155,10 @@ export default function CampaignsPage() {
     setInviting(true);
 
     // Parse emails — support comma, newline, semicolon separated
-    const lines = emailsRaw.split(/[\n,;]+/).map((l) => l.trim()).filter(Boolean);
-    const candidates = lines.map((line) => {
-      // Support "Name <email>" format
+    const allEmails = [...emailChips];
+    if (emailInput.trim()) allEmails.push(emailInput.trim());
+
+    const candidates = allEmails.map((line) => {
       const match = line.match(/^(.+?)\s*<(.+?)>$/);
       if (match) return { name: match[1].trim(), email: match[2].trim() };
       return { email: line };
@@ -125,9 +171,89 @@ export default function CampaignsPage() {
     });
     const data = await res.json();
     setInviteResults(data.results ?? []);
-    setEmailsRaw("");
+    setInviteErrors(data.errors ?? []);
+    setEmailChips([]);
+    setEmailInput("");
     setInviting(false);
     loadInvites(selected);
+  }
+
+  function addEmailChip(value: string) {
+    const parts = value.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) {
+      setEmailChips((prev) => [...prev, ...parts.filter((p) => !prev.includes(p))]);
+    }
+    setEmailInput("");
+  }
+
+  function removeChip(index: number) {
+    setEmailChips((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleDeleteCampaign(campaignId: string) {
+    if (!confirm("Delete this campaign? All invites will also be removed.")) return;
+    setDeletingId(campaignId);
+    const res = await fetch(`/api/campaigns/${campaignId}`, { method: "DELETE" });
+    if (res.ok) {
+      setCampaigns((p) => p.filter((c) => c.id !== campaignId));
+      if (selected?.id === campaignId) { setSelected(null); setInvites([]); }
+    }
+    setDeletingId("");
+  }
+
+  async function handlePlayAudio(sessionId: string) {
+    if (audioUrls[sessionId]) return; // already fetched
+    setAudioLoading((p) => ({ ...p, [sessionId]: true }));
+    const res = await fetch(`/api/interview/audio/${sessionId}`);
+    const data = await res.json();
+    if (res.ok && data.url) {
+      setAudioUrls((p) => ({ ...p, [sessionId]: data.url }));
+    }
+    setAudioLoading((p) => ({ ...p, [sessionId]: false }));
+  }
+
+  async function handleTranscript(sessionId: string) {
+    if (transcripts[sessionId]) return;
+    setTranscriptLoading((p) => ({ ...p, [sessionId]: true }));
+    const res = await fetch(`/api/interview/audio/${sessionId}/transcript`);
+    const data = await res.json();
+    setTranscripts((p) => ({
+      ...p,
+      [sessionId]: res.ok && data.transcript ? data.transcript : "Transcription failed. Please try again.",
+    }));
+    setTranscriptLoading((p) => ({ ...p, [sessionId]: false }));
+  }
+
+  async function loadSlots(campaignId: string) {
+    const res = await fetch(`/api/campaigns/${campaignId}/slots`);
+    const data = await res.json();
+    setSlots(data.slots ?? []);
+  }
+
+  async function handleAddSlot() {
+    if (!selected || !newSlotDate || !newSlotTime) return;
+    setAddingSlot(true);
+    const startsAt = new Date(`${newSlotDate}T${newSlotTime}`).toISOString();
+    await fetch(`/api/campaigns/${selected.id}/slots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slots: [{ startsAt, durationMin: newSlotDuration }] }),
+    });
+    setNewSlotDate(""); setNewSlotTime("");
+    await loadSlots(selected.id);
+    setAddingSlot(false);
+  }
+
+  async function handleDeleteSlot(slotId: string) {
+    if (!selected) return;
+    setDeletingSlotId(slotId);
+    await fetch(`/api/campaigns/${selected.id}/slots`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slotId }),
+    });
+    setSlots((p) => p.filter((s) => s.id !== slotId));
+    setDeletingSlotId("");
   }
 
   function copyLink(link: string, token: string) {
@@ -222,27 +348,38 @@ export default function CampaignsPage() {
             const completed = (c.invites ?? []).filter((i) => i.status === "completed").length;
             const abandoned = (c.invites ?? []).filter((i) => i.status === "abandoned").length;
             return (
-              <button key={c.id} onClick={() => loadInvites(c)}
-                className={`w-full text-left rounded-xl border p-4 transition-all ${selected?.id === c.id ? "border-violet-500 bg-violet-500/5" : "border-border hover:bg-accent"}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">{c.title}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{c.role}</p>
+              <div key={c.id} className={`rounded-xl border p-4 transition-all ${selected?.id === c.id ? "border-violet-500 bg-violet-500/5" : "border-border hover:bg-accent"}`}>
+                <button className="w-full text-left" onClick={() => loadInvites(c)}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{c.title}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{c.role}</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                   </div>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                  <div className="flex items-center gap-2 mt-3 flex-wrap">
+                    <Badge variant="secondary" className={getDifficultyColor(c.difficulty)}>{c.difficulty}</Badge>
+                    <Badge variant="outline" className="text-xs">{getRoundTypeLabel(c.roundType)}</Badge>
+                  </div>
+                  <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1"><Users className="h-3 w-3" />{c._count.invites} invited</span>
+                    <span className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-green-500" />{completed} done</span>
+                    {abandoned > 0 && (
+                      <span className="flex items-center gap-1 text-red-400">✗ {abandoned} left</span>
+                    )}
+                  </div>
+                </button>
+                <div className="flex justify-end mt-2 pt-2 border-t border-border/50">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteCampaign(c.id); }}
+                    disabled={deletingId === c.id}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-red-400 transition-colors"
+                  >
+                    {deletingId === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                    Delete
+                  </button>
                 </div>
-                <div className="flex items-center gap-2 mt-3 flex-wrap">
-                  <Badge variant="secondary" className={getDifficultyColor(c.difficulty)}>{c.difficulty}</Badge>
-                  <Badge variant="outline" className="text-xs">{getRoundTypeLabel(c.roundType)}</Badge>
-                </div>
-                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1"><Users className="h-3 w-3" />{c._count.invites} invited</span>
-                  <span className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-green-500" />{completed} done</span>
-                  {abandoned > 0 && (
-                    <span className="flex items-center gap-1 text-red-400">✗ {abandoned} left</span>
-                  )}
-                </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -268,15 +405,42 @@ export default function CampaignsPage() {
                 </CardHeader>
                 {showInvite && (
                   <CardContent className="space-y-4 pt-0">
-                    <div className="space-y-1.5">
+                  <div className="space-y-1.5">
                       <Label>Email Addresses</Label>
-                      <textarea
-                        className="w-full min-h-[100px] rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-                        placeholder={"One per line, or comma separated:\njohn@example.com\nJane Doe <jane@example.com>\nravi@company.com"}
-                        value={emailsRaw}
-                        onChange={(e) => setEmailsRaw(e.target.value)}
-                      />
-                      <p className="text-xs text-muted-foreground">Supports: email, Name &lt;email&gt;, comma or newline separated</p>
+                      <div
+                        className="min-h-[80px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus-within:ring-2 focus-within:ring-violet-500 flex flex-wrap gap-1.5 cursor-text"
+                        onClick={() => document.getElementById("email-chip-input")?.focus()}
+                      >
+                        {emailChips.map((chip, i) => (
+                          <span key={i} className="flex items-center gap-1 rounded-md bg-violet-500/15 border border-violet-500/30 text-violet-300 px-2 py-0.5 text-xs font-medium">
+                            {chip}
+                            <button type="button" onClick={() => removeChip(i)} className="ml-0.5 hover:text-white text-violet-400">×</button>
+                          </span>
+                        ))}
+                        <input
+                          id="email-chip-input"
+                          type="text"
+                          className="flex-1 min-w-[180px] bg-transparent outline-none text-sm placeholder:text-muted-foreground"
+                          placeholder={emailChips.length === 0 ? "user@example.com, user2@example.com" : ""}
+                          value={emailInput}
+                          onChange={(e) => setEmailInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === ",") {
+                              e.preventDefault();
+                              if (emailInput.trim()) addEmailChip(emailInput);
+                            } else if (e.key === "Backspace" && !emailInput && emailChips.length > 0) {
+                              removeChip(emailChips.length - 1);
+                            }
+                          }}
+                          onBlur={() => { if (emailInput.trim()) addEmailChip(emailInput); }}
+                          onPaste={(e) => {
+                            e.preventDefault();
+                            const pasted = e.clipboardData.getData("text");
+                            addEmailChip(pasted);
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">Separate multiple emails with commas. Press Enter or comma to add them to your list.</p>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
@@ -297,25 +461,124 @@ export default function CampaignsPage() {
                         </div>
                       </div>
                     </div>
-                    <Button onClick={handleInvite} disabled={!emailsRaw.trim() || inviting}>
+                    <Button onClick={handleInvite} disabled={(emailChips.length === 0 && !emailInput.trim()) || inviting}>
                       {inviting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                       {inviting ? "Sending…" : "Send Invites"}
                     </Button>
 
                     {/* Generated links */}
-                    {inviteResults.length > 0 && (
+                    {(inviteResults.length > 0 || inviteErrors.length > 0) && (
                       <div className="space-y-2">
-                        <p className="text-xs font-semibold text-green-400">✓ {inviteResults.length} invite(s) created</p>
-                        {inviteResults.map((r) => (
-                          <div key={r.email} className="flex items-center gap-2 rounded-lg bg-secondary/50 px-3 py-2">
-                            <span className="text-xs text-muted-foreground flex-1 truncate">{r.email}</span>
-                            <button onClick={() => copyLink(r.link, r.link)}
-                              className="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 shrink-0">
-                              {copiedToken === r.link ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                              {copiedToken === r.link ? "Copied!" : "Copy link"}
-                            </button>
-                          </div>
-                        ))}
+                        {inviteResults.length > 0 && (
+                          <>
+                            <p className="text-xs font-semibold text-green-400">✓ {inviteResults.length} invite(s) created</p>
+                            {inviteResults.map((r) => (
+                              <div key={r.email} className="flex items-center gap-2 rounded-lg bg-secondary/50 px-3 py-2">
+                                <span className="text-xs text-muted-foreground flex-1 truncate">{r.email}</span>
+                                <button onClick={() => copyLink(r.link, r.link)}
+                                  className="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 shrink-0">
+                                  {copiedToken === r.link ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                  {copiedToken === r.link ? "Copied!" : "Copy link"}
+                                </button>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                        {inviteErrors.length > 0 && (
+                          <>
+                            <p className="text-xs font-semibold text-yellow-400 flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3" /> {inviteErrors.length} skipped
+                            </p>
+                            {inviteErrors.map((e) => (
+                              <div key={e.email} className="flex items-center gap-2 rounded-lg bg-yellow-500/5 border border-yellow-500/20 px-3 py-2">
+                                <span className="text-xs text-muted-foreground flex-1 truncate">{e.email}</span>
+                                <span className="text-xs text-yellow-500 shrink-0">{e.error}</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
+
+              {/* ── Slot Management ── */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-blue-400" /> Interview Slots
+                    </CardTitle>
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setShowSlots(!showSlots);
+                      if (!showSlots && selected) loadSlots(selected.id);
+                    }}>
+                      <Calendar className="h-3.5 w-3.5" /> {showSlots ? "Hide" : "Manage Slots"}
+                    </Button>
+                  </div>
+                </CardHeader>
+                {showSlots && (
+                  <CardContent className="space-y-4 pt-0">
+                    {/* Add slot form */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Date</Label>
+                        <Input type="date" value={newSlotDate} onChange={(e) => setNewSlotDate(e.target.value)}
+                          min={new Date().toISOString().split("T")[0]} className="h-8 text-xs" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Time</Label>
+                        <Input type="time" value={newSlotTime} onChange={(e) => setNewSlotTime(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Duration (min)</Label>
+                        <Select value={String(newSlotDuration)} onValueChange={(v) => setNewSlotDuration(Number(v))}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {[15, 20, 30, 45, 60].map((d) => <SelectItem key={d} value={String(d)}>{d} min</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <Button size="sm" onClick={handleAddSlot} disabled={!newSlotDate || !newSlotTime || addingSlot} className="h-8">
+                        {addingSlot ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add
+                      </Button>
+                    </div>
+
+                    {/* Slots list */}
+                    {slots.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-3">No slots added yet. Add slots above.</p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {slots.map((slot) => {
+                          const appUrl = typeof window !== "undefined" ? window.location.origin : "";
+                          const scheduleLink = `${appUrl}/interview/schedule/${selected?.id}`;
+                          return (
+                            <div key={slot.id} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${slot.isBooked ? "border-green-500/20 bg-green-500/5" : "border-border"}`}>
+                              <Calendar className={`h-3.5 w-3.5 shrink-0 ${slot.isBooked ? "text-green-400" : "text-muted-foreground"}`} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium">
+                                  {new Date(slot.startsAt).toLocaleString("en-IN", { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground">{slot.durationMin} min · {slot.isBooked ? "Booked ✓" : "Available"}</p>
+                              </div>
+                              {!slot.isBooked && (
+                                <button onClick={() => handleDeleteSlot(slot.id)} disabled={deletingSlotId === slot.id}
+                                  className="text-muted-foreground hover:text-red-400 transition-colors">
+                                  {deletingSlotId === slot.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <div className="pt-1">
+                          <p className="text-[10px] text-muted-foreground">
+                            Share scheduling link with candidates:
+                          </p>
+                          <p className="text-[10px] text-violet-400 break-all">
+                            {typeof window !== "undefined" ? window.location.origin : ""}/interview/schedule/[invite-token]
+                          </p>
+                        </div>
                       </div>
                     )}
                   </CardContent>
@@ -323,8 +586,7 @@ export default function CampaignsPage() {
               </Card>
 
               {/* Candidates table */}
-              <Card>
-                <CardHeader><CardTitle className="text-base">Candidates ({invites.length})</CardTitle></CardHeader>
+              <Card>                <CardHeader><CardTitle className="text-base">Candidates ({invites.length})</CardTitle></CardHeader>
                 <CardContent>
                   {invitesLoading ? (
                     <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
@@ -336,6 +598,20 @@ export default function CampaignsPage() {
                         const link = `${appUrl}/interview/invite/${inv.token}`;
                         return (
                           <div key={inv.id} className="flex items-center gap-3 rounded-lg border border-border p-3">
+                            {/* Candidate photo or avatar */}
+                            <div className="shrink-0">
+                              {inv.photoUrl ? (
+                                <img
+                                  src={inv.photoUrl}
+                                  alt={inv.name || inv.email}
+                                  className="w-20 h-20 rounded-xl object-cover border-2 border-violet-500/40 shadow-md"
+                                />
+                              ) : (
+                                <div className="w-20 h-20 rounded-xl bg-secondary flex items-center justify-center text-2xl font-bold text-muted-foreground">
+                                  {(inv.name || inv.email).charAt(0).toUpperCase()}
+                                </div>
+                              )}
+                            </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium truncate">{inv.name || inv.email}</p>
                               {inv.name && <p className="text-xs text-muted-foreground truncate">{inv.email}</p>}
@@ -343,6 +619,39 @@ export default function CampaignsPage() {
                             <div className="flex items-center gap-2 shrink-0">
                               {inv.score !== null && (
                                 <span className={`text-sm font-bold ${getScoreColor(inv.score)}`}>{inv.score}/100</span>
+                              )}
+                              {/* Integrity flag badge */}
+                              {inv.integrityFlag && inv.integrityFlag !== "clean" && (
+                                <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold border ${
+                                  inv.integrityFlag === "suspicious"
+                                    ? "bg-red-500/20 border-red-500/50 text-red-400"
+                                    : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"
+                                }`}
+                                  title={inv.integrityFlag === "suspicious" ? "10+ violations — high risk" : "5+ violations — review recommended"}>
+                                  {inv.integrityFlag === "suspicious" ? "🚨 Suspicious" : "⚠️ Warning"}
+                                </span>
+                              )}
+                              {/* Tab switch warning badge */}
+                              {inv.tabSwitchCount > 0 && (
+                                <span
+                                  title={`Tab switched ${inv.tabSwitchCount} time(s) during interview`}
+                                  className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border ${
+                                    inv.tabSwitchCount >= 3
+                                      ? "bg-red-500/15 border-red-500/40 text-red-400"
+                                      : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"
+                                  }`}
+                                >
+                                  ⚠️ {inv.tabSwitchCount}x switch
+                                </span>
+                              )}
+                              {/* Proctoring violations */}
+                              {inv.proctoring && (inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste) > 0 && (
+                                <span
+                                  title={`Faces: ${inv.proctoring.multipleFaces} | Away: ${inv.proctoring.lookingAway} | Copy: ${inv.proctoring.copyPaste} | Noise: ${inv.proctoring.noise}`}
+                                  className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-red-500/15 border-red-500/40 text-red-400 cursor-help"
+                                >
+                                  🔍 {inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste} flags
+                                </span>
                               )}
                               <Badge variant={
                                 inv.status === "completed" ? "success" :
@@ -359,6 +668,30 @@ export default function CampaignsPage() {
                                 {copiedToken === inv.token ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
                               </button>
                             </div>
+                            {/* Audio player */}
+                            {inv.hasAudio && inv.sessionId && (
+                              <div className="mt-2 pt-2 border-t border-border/50">
+                                {audioUrls[inv.sessionId] ? (
+                                  <audio
+                                    controls
+                                    src={audioUrls[inv.sessionId]}
+                                    className="w-full h-8"
+                                    style={{ colorScheme: "dark" }}
+                                  />
+                                ) : (
+                                  <button
+                                    onClick={() => handlePlayAudio(inv.sessionId!)}
+                                    disabled={audioLoading[inv.sessionId]}
+                                    className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                                  >
+                                    {audioLoading[inv.sessionId]
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      : <span>🎧</span>}
+                                    {audioLoading[inv.sessionId] ? "Loading…" : "Play Interview Recording"}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}

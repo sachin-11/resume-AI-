@@ -2,9 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { callGroq } from "@/lib/groq";
 import { FOLLOWUP_SYSTEM, followupPrompt } from "@/lib/prompts";
+import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
 
 // Public endpoint — no auth required (for candidate invite sessions)
 export async function POST(req: NextRequest) {
+  // Rate limit
+  const rl = rateLimit(getIP(req), RATE_LIMITS.publicAnswer);
+  if (!rl.success) return rateLimitResponse(rl);
   try {
     const { questionId, answerText, sessionId } = await req.json();
 

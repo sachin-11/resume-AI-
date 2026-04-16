@@ -2,185 +2,321 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { BarChart3, FileText, MessageSquare, TrendingUp, Upload, ArrowRight, Loader2 } from "lucide-react";
+import {
+  BarChart3, FileText, MessageSquare, TrendingUp,
+  Upload, ArrowRight, Loader2, Trophy, Users,
+} from "lucide-react";
+import {
+  ResponsiveContainer, LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  PieChart, Pie, Cell, RadarChart, Radar, PolarGrid,
+  PolarAngleAxis,
+} from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScoreChart } from "@/components/dashboard/score-chart";
+import { Progress } from "@/components/ui/progress";
 import { formatRelativeTime, getScoreColor } from "@/lib/utils";
 
-interface Stats {
-  totalInterviews: number;
-  avgScore: number;
-  totalResumes: number;
-  lastActivity: string | null;
-}
+// ── Types ────────────────────────────────────────────────────────
+interface Stats { totalInterviews: number; avgScore: number; totalResumes: number; lastActivity: string | null }
+interface Trend { date: string; score: number; technical: number; communication: number; confidence: number }
+interface ByRole { role: string; avg: number; count: number }
+interface ByDiff { difficulty: string; avg: number; count: number }
+interface CampaignStat { name: string; role: string; pass: number; fail: number; avg: number; total: number }
+interface TopCandidate { title: string; role: string; difficulty: string; overallScore: number; technicalScore: number; communicationScore: number; date: string }
 
-interface Trend {
-  date: string;
-  score: number;
+const DIFF_COLOR: Record<string, string> = { beginner: "#22c55e", intermediate: "#eab308", advanced: "#ef4444" };
+const PIE_COLORS = ["#22c55e", "#ef4444"];
+
+// ── Custom tooltip ───────────────────────────────────────────────
+function ScoreTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-lg">
+      <p className="font-semibold mb-1">{label}</p>
+      {payload.map((p) => (
+        <p key={p.name} style={{ color: p.color }}>{p.name}: {p.value}</p>
+      ))}
+    </div>
+  );
 }
 
 export default function DashboardPage() {
   const { data: session } = useSession();
   const [stats, setStats] = useState<Stats | null>(null);
   const [trends, setTrends] = useState<Trend[]>([]);
+  const [byRole, setByRole] = useState<ByRole[]>([]);
+  const [byDifficulty, setByDifficulty] = useState<ByDiff[]>([]);
+  const [campaignStats, setCampaignStats] = useState<CampaignStat[]>([]);
+  const [topCandidates, setTopCandidates] = useState<TopCandidate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
+  function load() {
+    setLoading(true); setError(false);
     fetch("/api/dashboard/stats")
       .then((r) => r.json())
       .then((d) => {
         setStats(d.stats);
         setTrends(d.trends ?? []);
+        setByRole(d.byRole ?? []);
+        setByDifficulty(d.byDifficulty ?? []);
+        setCampaignStats(d.campaignStats ?? []);
+        setTopCandidates(d.topCandidates ?? []);
       })
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
 
   const statCards = [
-    {
-      title: "Total Interviews",
-      value: stats?.totalInterviews ?? 0,
-      icon: MessageSquare,
-      color: "text-violet-500",
-      bg: "bg-violet-500/10",
-    },
-    {
-      title: "Avg Score",
-      value: stats?.avgScore ? `${stats.avgScore}/100` : "N/A",
-      icon: TrendingUp,
-      color: getScoreColor(stats?.avgScore ?? 0),
-      bg: "bg-green-500/10",
-    },
-    {
-      title: "Resumes Uploaded",
-      value: stats?.totalResumes ?? 0,
-      icon: FileText,
-      color: "text-blue-500",
-      bg: "bg-blue-500/10",
-    },
-    {
-      title: "Last Activity",
-      value: stats?.lastActivity ? formatRelativeTime(stats.lastActivity) : "Never",
-      icon: BarChart3,
-      color: "text-orange-500",
-      bg: "bg-orange-500/10",
-    },
+    { title: "Total Interviews", value: stats?.totalInterviews ?? 0, icon: MessageSquare, color: "text-violet-500", bg: "bg-violet-500/10" },
+    { title: "Avg Score", value: stats?.avgScore ? `${stats.avgScore}/100` : "N/A", icon: TrendingUp, color: getScoreColor(stats?.avgScore ?? 0), bg: "bg-green-500/10" },
+    { title: "Resumes", value: stats?.totalResumes ?? 0, icon: FileText, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { title: "Last Activity", value: stats?.lastActivity ? formatRelativeTime(stats.lastActivity) : "Never", icon: BarChart3, color: "text-orange-500", bg: "bg-orange-500/10" },
   ];
 
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+
+  if (error) return (
+    <div className="flex flex-col items-center justify-center h-64 gap-2">
+      <p className="text-sm text-muted-foreground">Failed to load stats</p>
+      <Button variant="outline" size="sm" onClick={load}>Retry</Button>
+    </div>
+  );
+
+  const hasData = trends.length > 0;
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold">
-            Welcome back, {session?.user?.name?.split(" ")[0] ?? "there"} 👋
-          </h1>
-          <p className="text-muted-foreground mt-1">Here&apos;s your interview prep overview</p>
+          <h1 className="text-2xl font-bold">Welcome back, {session?.user?.name?.split(" ")[0] ?? "there"} 👋</h1>
+          <p className="text-muted-foreground mt-1">Your interview analytics overview</p>
         </div>
         <Button asChild>
-          <Link href="/interview/setup">
-            Start Interview <ArrowRight className="h-4 w-4" />
-          </Link>
+          <Link href="/interview/setup">Start Interview <ArrowRight className="h-4 w-4" /></Link>
         </Button>
       </div>
 
-      {/* Stats */}
-      {loading ? (
-        <div className="flex items-center justify-center h-32">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
+      {/* ── Stat Cards ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {statCards.map(({ title, value, icon: Icon, color, bg }) => (
+          <Card key={title}>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-muted-foreground">{title}</p>
+                  <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+                </div>
+                <div className={`rounded-lg p-2.5 ${bg}`}>
+                  <Icon className={`h-5 w-5 ${color}`} />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {!hasData ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center h-48 text-center">
+            <BarChart3 className="h-10 w-10 text-muted-foreground/30 mb-3" />
+            <p className="text-muted-foreground text-sm">No interview data yet</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">Complete interviews to see analytics</p>
+            <Button asChild size="sm" className="mt-4"><Link href="/interview/setup">Start First Interview</Link></Button>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {statCards.map(({ title, value, icon: Icon, color, bg }) => (
-            <Card key={title}>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">{title}</p>
-                    <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+        <>
+          {/* ── Score Trend ── */}
+          <Card>
+            <CardHeader><CardTitle className="text-base flex items-center gap-2"><TrendingUp className="h-4 w-4 text-violet-400" />Score Trends Over Time</CardTitle></CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={trends} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#64748b" }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#64748b" }} />
+                  <Tooltip content={<ScoreTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Line type="monotone" dataKey="score" name="Overall" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="technical" name="Technical" stroke="#3b82f6" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                  <Line type="monotone" dataKey="communication" name="Communication" stroke="#22c55e" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                  <Line type="monotone" dataKey="confidence" name="Confidence" stroke="#eab308" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* ── Row 2: By Role + By Difficulty ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Avg score by role */}
+            {byRole.length > 0 && (
+              <Card>
+                <CardHeader><CardTitle className="text-base flex items-center gap-2"><BarChart3 className="h-4 w-4 text-blue-400" />Avg Score by Role</CardTitle></CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={byRole} layout="vertical" margin={{ left: 0, right: 20, top: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" horizontal={false} />
+                      <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#64748b" }} />
+                      <YAxis type="category" dataKey="role" tick={{ fontSize: 10, fill: "#94a3b8" }} width={90} />
+                      <Tooltip content={<ScoreTooltip />} />
+                      <Bar dataKey="avg" name="Avg Score" fill="#7c3aed" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Avg score by difficulty */}
+            {byDifficulty.length > 0 && (
+              <Card>
+                <CardHeader><CardTitle className="text-base flex items-center gap-2"><BarChart3 className="h-4 w-4 text-orange-400" />Avg Score by Difficulty</CardTitle></CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={byDifficulty} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
+                      <XAxis dataKey="difficulty" tick={{ fontSize: 11, fill: "#94a3b8" }} />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#64748b" }} />
+                      <Tooltip content={<ScoreTooltip />} />
+                      <Bar dataKey="avg" name="Avg Score" radius={[4, 4, 0, 0]}>
+                        {byDifficulty.map((entry) => (
+                          <Cell key={entry.difficulty} fill={DIFF_COLOR[entry.difficulty] ?? "#7c3aed"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex gap-3 justify-center mt-2">
+                    {byDifficulty.map((d) => (
+                      <div key={d.difficulty} className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <span className="w-2 h-2 rounded-full" style={{ background: DIFF_COLOR[d.difficulty] ?? "#7c3aed" }} />
+                        {d.difficulty} ({d.count})
+                      </div>
+                    ))}
                   </div>
-                  <div className={`rounded-lg p-3 ${bg}`}>
-                    <Icon className={`h-5 w-5 ${color}`} />
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* ── Campaign Pass/Fail ── */}
+          {campaignStats.length > 0 && (
+            <Card>
+              <CardHeader><CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4 text-green-400" />Campaign Pass / Fail Rate</CardTitle></CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={campaignStats} margin={{ top: 5, right: 10, left: -20, bottom: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#94a3b8" }} angle={-20} textAnchor="end" />
+                      <YAxis tick={{ fontSize: 11, fill: "#64748b" }} />
+                      <Tooltip content={<ScoreTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Bar dataKey="pass" name="Pass (≥60)" fill="#22c55e" radius={[4, 4, 0, 0]} stackId="a" />
+                      <Bar dataKey="fail" name="Fail (<60)" fill="#ef4444" radius={[4, 4, 0, 0]} stackId="a" />
+                    </BarChart>
+                  </ResponsiveContainer>
+
+                  <div className="space-y-3">
+                    {campaignStats.map((c) => {
+                      const passRate = c.total > 0 ? Math.round((c.pass / c.total) * 100) : 0;
+                      return (
+                        <div key={c.name}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium truncate max-w-[160px]">{c.name}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-xs text-muted-foreground">{c.pass}/{c.total}</span>
+                              <span className={`text-xs font-bold ${passRate >= 60 ? "text-green-400" : "text-red-400"}`}>{passRate}%</span>
+                            </div>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
+                            <div className="h-full bg-green-500 rounded-full" style={{ width: `${passRate}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </CardContent>
             </Card>
-          ))}
-        </div>
+          )}
+
+          {/* ── Top Performers ── */}
+          {topCandidates.length > 0 && (
+            <Card>
+              <CardHeader><CardTitle className="text-base flex items-center gap-2"><Trophy className="h-4 w-4 text-yellow-400" />Best Performing Sessions</CardTitle></CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {topCandidates.map((c, i) => (
+                    <div key={i} className="flex items-center gap-4 rounded-lg border border-border p-3">
+                      {/* Rank */}
+                      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+                        i === 0 ? "bg-yellow-500/20 text-yellow-400" :
+                        i === 1 ? "bg-slate-400/20 text-slate-400" :
+                        i === 2 ? "bg-orange-500/20 text-orange-400" : "bg-secondary text-muted-foreground"
+                      }`}>
+                        {i + 1}
+                      </div>
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{c.title}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{c.difficulty}</Badge>
+                          <span className="text-xs text-muted-foreground">{c.date}</span>
+                        </div>
+                      </div>
+                      {/* Scores */}
+                      <div className="shrink-0 text-right">
+                        <p className={`text-lg font-black ${getScoreColor(c.overallScore)}`}>{c.overallScore}</p>
+                        <p className="text-[10px] text-muted-foreground">overall</p>
+                      </div>
+                      {/* Mini radar */}
+                      <div className="shrink-0 hidden sm:block">
+                        <ResponsiveContainer width={80} height={60}>
+                          <RadarChart data={[
+                            { s: "Tech", v: c.technicalScore },
+                            { s: "Comm", v: c.communicationScore },
+                            { s: "Conf", v: c.overallScore },
+                          ]}>
+                            <PolarGrid stroke="#1e1e2e" />
+                            <PolarAngleAxis dataKey="s" tick={{ fontSize: 8, fill: "#64748b" }} />
+                            <Radar dataKey="v" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.3} />
+                          </RadarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
-      {/* Chart + Quick Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Performance Trend</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {trends.length > 0 ? (
-                <ScoreChart data={trends} />
-              ) : (
-                <div className="flex flex-col items-center justify-center h-48 text-center">
-                  <BarChart3 className="h-10 w-10 text-muted-foreground/30 mb-3" />
-                  <p className="text-muted-foreground text-sm">No interview data yet</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Complete interviews to see your progress</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Quick Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Link href="/upload-resume" className="flex items-center gap-3 rounded-lg p-3 hover:bg-accent transition-colors group">
-                <div className="rounded-lg bg-violet-500/10 p-2">
-                  <Upload className="h-4 w-4 text-violet-500" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Upload Resume</p>
-                  <p className="text-xs text-muted-foreground">Get AI analysis</p>
-                </div>
-                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-              </Link>
-              <Link href="/interview/setup" className="flex items-center gap-3 rounded-lg p-3 hover:bg-accent transition-colors group">
-                <div className="rounded-lg bg-green-500/10 p-2">
-                  <MessageSquare className="h-4 w-4 text-green-500" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Mock Interview</p>
-                  <p className="text-xs text-muted-foreground">Practice with AI</p>
-                </div>
-                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-              </Link>
-              <Link href="/resume-report" className="flex items-center gap-3 rounded-lg p-3 hover:bg-accent transition-colors group">
-                <div className="rounded-lg bg-blue-500/10 p-2">
-                  <FileText className="h-4 w-4 text-blue-500" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Resume Reports</p>
-                  <p className="text-xs text-muted-foreground">View analysis</p>
-                </div>
-                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-              </Link>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center gap-2 mb-3">
-                <Badge variant="success">Pro Tip</Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Upload your resume first to get personalized interview questions tailored to your experience.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+      {/* ── Quick Actions ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {[
+          { href: "/upload-resume", icon: Upload, color: "text-violet-500", bg: "bg-violet-500/10", title: "Upload Resume", sub: "Get AI analysis" },
+          { href: "/interview/setup", icon: MessageSquare, color: "text-green-500", bg: "bg-green-500/10", title: "Mock Interview", sub: "Practice with AI" },
+          { href: "/resume-report", icon: FileText, color: "text-blue-500", bg: "bg-blue-500/10", title: "Resume Reports", sub: "View analysis" },
+        ].map(({ href, icon: Icon, color, bg, title, sub }) => (
+          <Link key={href} href={href} className="flex items-center gap-3 rounded-xl border border-border p-4 hover:bg-accent transition-colors group">
+            <div className={`rounded-lg p-2 ${bg}`}><Icon className={`h-4 w-4 ${color}`} /></div>
+            <div className="flex-1">
+              <p className="text-sm font-medium">{title}</p>
+              <p className="text-xs text-muted-foreground">{sub}</p>
+            </div>
+            <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+          </Link>
+        ))}
       </div>
     </div>
   );

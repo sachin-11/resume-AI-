@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Brain, Loader2, CheckCircle, AlertCircle, ArrowRight, Clock, Mic, Volume2 } from "lucide-react";
+import { Brain, Loader2, CheckCircle, AlertCircle, ArrowRight, Clock, Mic, Volume2, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getDifficultyColor, getRoundTypeLabel } from "@/lib/utils";
 import { CandidateInterviewSession } from "@/components/interview/candidate-session";
+import { LANGUAGES, UI_STRINGS, type SupportedLang } from "@/lib/i18n";
 
 interface CampaignInfo {
   title: string;
@@ -35,6 +36,7 @@ export default function CandidateInvitePage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+  const [language, setLanguage] = useState<SupportedLang>("en");
 
   useEffect(() => {
     fetch(`/api/interview/invite/${token}`)
@@ -57,7 +59,11 @@ export default function CandidateInvitePage() {
 
   async function handleStart() {
     setStarting(true);
-    const res = await fetch(`/api/interview/invite/${token}`, { method: "POST" });
+    const res = await fetch(`/api/interview/invite/${token}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language }),
+    });
     const data = await res.json();
     if (res.ok) {
       setSessionId(data.session.id);
@@ -113,6 +119,7 @@ export default function CandidateInvitePage() {
       sessionId={sessionId}
       token={token}
       candidateName={invite?.name ?? ""}
+      language={language}
       onComplete={() => setStage("done")}
     />
   );
@@ -190,6 +197,29 @@ export default function CandidateInvitePage() {
               </p>
             )}
 
+            {/* Language selector */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Globe className="h-3.5 w-3.5" /> {UI_STRINGS[language].chooseLanguage}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {(Object.entries(LANGUAGES) as [SupportedLang, typeof LANGUAGES[SupportedLang]][]).map(([code, lang]) => (
+                  <button
+                    key={code}
+                    onClick={() => setLanguage(code)}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all ${
+                      language === code
+                        ? "border-violet-500 bg-violet-500/10 text-violet-400"
+                        : "border-border hover:bg-accent text-muted-foreground"
+                    }`}
+                  >
+                    <span className="text-base">{lang.flag}</span>
+                    <span className="font-medium">{lang.nativeLabel}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Tips */}
             <div className="space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Before you start</p>
@@ -212,7 +242,7 @@ export default function CandidateInvitePage() {
               ) : (
                 <ArrowRight className="h-4 w-4" />
               )}
-              {starting ? "Preparing your interview…" : "Start Interview"}
+              {starting ? "Preparing your interview…" : UI_STRINGS[language].startInterview}
             </Button>
 
             <p className="text-center text-xs text-muted-foreground">

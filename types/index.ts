@@ -1,4 +1,5 @@
 export interface ResumeAnalysis {
+  // Basic
   skills: string[];
   strengths: string[];
   missingSkills: string[];
@@ -10,6 +11,26 @@ export interface ResumeAnalysis {
   yearsOfExperience: number;
   educationLevel: string;
   overallScore: number;
+
+  // Structured data (new)
+  structuredData?: {
+    contactInfo: { name?: string; email?: string; phone?: string; location?: string; linkedin?: string; github?: string };
+    summary?: string;
+    experience: Array<{ company: string; role: string; duration: string; highlights: string[] }>;
+    education: Array<{ institution: string; degree: string; year?: string }>;
+    skillsByCategory: { languages: string[]; frameworks: string[]; databases: string[]; tools: string[]; cloud: string[]; other: string[] };
+    certifications: string[];
+    projects: Array<{ name: string; tech: string[]; description: string }>;
+  };
+
+  // ATS match (populated when JD is provided)
+  atsMatch?: {
+    score: number;                  // 0-100
+    matchedKeywords: string[];      // found in both resume & JD
+    missingKeywords: string[];      // in JD but not in resume
+    extraKeywords: string[];        // in resume but not in JD
+    recommendation: string;
+  };
 }
 
 export interface GeneratedQuestion {
@@ -26,7 +47,7 @@ export interface FeedbackReport {
   confidenceScore: number;
   strengths: string[];
   weakAreas: string[];
-  betterAnswers: Array<{ question: string; improvedAnswer: string }>;
+  betterAnswers: Array<{ question: string; improvedAnswer: string; candidateAnswer?: string }>;
   improvementRoadmap: string[];
   summary: string;
 }
@@ -58,6 +79,8 @@ declare module "next-auth" {
       id: string;
       name?: string | null;
       email?: string | null;
+      role: "admin" | "recruiter" | "viewer";
+      orgId: string | null;
     };
   }
 }

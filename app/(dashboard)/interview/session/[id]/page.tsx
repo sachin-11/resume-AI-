@@ -3,7 +3,8 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Send, Loader2, Bot, User, Flag, CheckCircle,
-  Volume2, VolumeX, Mic, MicOff, AudioLines, StopCircle,
+  Volume2, VolumeX, Mic, MicOff, AudioLines, StopCircle, UserRound,
+  Camera, CameraOff, VideoOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { getDifficultyColor, getRoundTypeLabel } from "@/lib/utils";
 import { useTTS, useSTT } from "@/hooks/use-speech";
+import { getPersona } from "@/lib/personas";
+import { useCamera } from "@/hooks/use-camera";
 
 interface Question {
   id: string;
@@ -40,13 +43,29 @@ export default function InterviewSessionPage() {
   const [done, setDone] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const doneRef = useRef(false);
+
+  // Warn user before navigating away mid-interview
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (!doneRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   // Keep latest submit fn accessible inside STT callback
   const submitRef = useRef<((text: string) => void) | null>(null);
 
   // ── TTS ──────────────────────────────────────────────────────
-  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled } = useTTS();
+  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender } = useTTS("male");
   const lastSpokenId = useRef("");
+
+  // ── Camera ───────────────────────────────────────────────────
+  const { status: camStatus, enabled: camEnabled, toggleCamera, attachVideo } = useCamera();
 
   useEffect(() => {
     if (!ttsEnabled) return;
@@ -169,6 +188,7 @@ export default function InterviewSessionPage() {
   // ── End interview ────────────────────────────────────────────
   async function handleEndInterview() {
     stopMic(); stopSpeaking(); setFinishing(true);
+    doneRef.current = true;
     await fetch("/api/interview/complete", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId: id }),
@@ -218,6 +238,37 @@ export default function InterviewSessionPage() {
               <span className="hidden sm:inline">{speaking ? "Speaking…" : ttsEnabled ? "Voice On" : "Voice Off"}</span>
             </button>
 
+            {/* Voice gender toggle */}
+            {ttsEnabled && (
+              <button
+                onClick={() => { stopSpeaking(); setVoiceGender(voiceGender === "male" ? "female" : "male"); }}
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border border-border text-muted-foreground hover:bg-accent transition-all"
+                title="Switch interviewer voice"
+              >
+                <UserRound className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{voiceGender === "male" ? "♂ Male" : "♀ Female"}</span>
+              </button>
+            )}
+
+            {/* Camera toggle */}
+            <button
+              onClick={toggleCamera}
+              title={camEnabled ? "Turn off camera" : "Turn on camera"}
+              disabled={camStatus === "denied"}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-all ${
+                camEnabled
+                  ? "border-green-500 bg-green-500/10 text-green-400"
+                  : camStatus === "denied"
+                  ? "border-red-500/40 text-red-400 cursor-not-allowed opacity-60"
+                  : "border-border text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              {camEnabled ? <Camera className="h-3.5 w-3.5" /> : camStatus === "denied" ? <VideoOff className="h-3.5 w-3.5" /> : <CameraOff className="h-3.5 w-3.5" />}
+              <span className="hidden sm:inline">
+                {camEnabled ? "Cam On" : camStatus === "denied" ? "Blocked" : "Camera"}
+              </span>
+            </button>
+
             {/* End interview */}
             {!confirmEnd ? (
               <button
@@ -244,6 +295,45 @@ export default function InterviewSessionPage() {
         </div>
         <Progress value={progress} className="mt-3" />
       </div>
+
+      {/* ── Floating Camera Preview ── */}
+      {camEnabled && (
+        <div className="fixed bottom-24 right-4 z-50 group">
+          <div
+            className="relative rounded-2xl overflow-hidden border-2 border-green-500/50 shadow-2xl shadow-black/40 bg-black"
+            style={{ width: 200, height: 150 }}
+          >
+            <video
+              ref={attachVideo}
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
+            {/* Live indicator */}
+            <div className="absolute top-2 left-2 flex items-center gap-1 bg-black/60 rounded-full px-2 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-[10px] text-white font-medium">LIVE</span>
+            </div>
+            {/* Close on hover */}
+            <button
+              onClick={toggleCamera}
+              className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 rounded-full p-1 text-white hover:bg-red-500/80"
+            >
+              <CameraOff className="h-3 w-3" />
+            </button>
+          </div>
+          <p className="text-center text-[10px] text-muted-foreground mt-1">You</p>
+        </div>
+      )}
+
+      {/* Camera permission denied */}
+      {camStatus === "denied" && (
+        <div className="mx-0 mb-2 flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
+          <VideoOff className="h-3.5 w-3.5 shrink-0" />
+          Camera access blocked. Allow camera in browser settings and refresh.
+        </div>
+      )}
 
       {/* ── Chat ── */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin">
@@ -345,7 +435,7 @@ export default function InterviewSessionPage() {
                       listening ? "border-red-500/50 bg-red-500/5" : ""
                     }`}
                     disabled={submitting}
-                    onKeyDown={(e) => { if (e.key === "Enter" && e.ctrlKey) doSubmit(answer); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSubmit(answer); } }}
                   />
                   {/* Auto-send countdown bar — only shows when canSubmit */}
                   {listening && canSubmit && countdown > 0 && (
@@ -371,7 +461,7 @@ export default function InterviewSessionPage() {
 
             <div className="flex items-center justify-between mt-2">
               <p className="text-xs text-muted-foreground">
-                <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Ctrl+Enter</kbd> to submit manually
+                <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Enter</kbd> to submit · <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Shift+Enter</kbd> for newline
               </p>
               {listening && (
                 <div className="flex items-center gap-2">

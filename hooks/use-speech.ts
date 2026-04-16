@@ -2,9 +2,46 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
 // ── Text-to-Speech ──────────────────────────────────────────────
-export function useTTS() {
+export type VoiceGender = "male" | "female";
+
+// Female voice keywords (browser voices)
+const FEMALE_KEYWORDS = ["female", "woman", "girl", "zira", "samantha", "victoria",
+  "karen", "moira", "tessa", "fiona", "veena", "susan", "kate", "lisa",
+  "google uk english female", "google us english"];
+
+// Male voice keywords
+const MALE_KEYWORDS = ["male", "man", "guy", "david", "mark", "daniel", "alex",
+  "fred", "jorge", "diego", "google uk english male"];
+
+function pickVoice(gender: VoiceGender): SpeechSynthesisVoice | null {
+  if (typeof window === "undefined" || !window.speechSynthesis) return null;
+  const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
+  if (voices.length === 0) return null;
+
+  const keywords = gender === "female" ? FEMALE_KEYWORDS : MALE_KEYWORDS;
+
+  // Try keyword match first
+  const matched = voices.find((v) =>
+    keywords.some((kw) => v.name.toLowerCase().includes(kw))
+  );
+  if (matched) return matched;
+
+  // Fallback: pitch-based guess — female voices tend to have higher pitch names
+  // Just return first English voice as last resort
+  return voices[0];
+}
+
+export function useTTS(initialGender: VoiceGender = "male") {
   const [speaking, setSpeaking] = useState(false);
   const [enabled, setEnabled] = useState(true);
+  const [voiceGender, setVoiceGender] = useState<VoiceGender>(initialGender);
+
+  // Voices load asynchronously in some browsers
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.speechSynthesis.getVoices(); // trigger load
+    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+  }, []);
 
   const speak = useCallback(
     (text: string) => {
@@ -12,20 +49,23 @@ export function useTTS() {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.92;
-      utterance.pitch = 1;
       utterance.volume = 1;
-      const voices = window.speechSynthesis.getVoices();
-      const preferred = voices.find(
-        (v) => v.lang.startsWith("en") &&
-          (v.name.includes("Google") || v.name.includes("Samantha") || v.name.includes("Natural"))
-      );
-      if (preferred) utterance.voice = preferred;
+
+      const voice = pickVoice(voiceGender);
+      if (voice) {
+        utterance.voice = voice;
+        // Adjust pitch to reinforce gender feel
+        utterance.pitch = voiceGender === "female" ? 1.2 : 0.85;
+      } else {
+        utterance.pitch = voiceGender === "female" ? 1.2 : 0.85;
+      }
+
       utterance.onstart = () => setSpeaking(true);
       utterance.onend = () => setSpeaking(false);
       utterance.onerror = () => setSpeaking(false);
       window.speechSynthesis.speak(utterance);
     },
-    [enabled]
+    [enabled, voiceGender]
   );
 
   const stop = useCallback(() => {
@@ -36,15 +76,16 @@ export function useTTS() {
   }, []);
 
   useEffect(() => () => stop(), [stop]);
-  return { speak, stop, speaking, enabled, setEnabled };
+  return { speak, stop, speaking, enabled, setEnabled, voiceGender, setVoiceGender };
 }
 
 // ── Speech-to-Text ──────────────────────────────────────────────
 interface STTOptions {
   onInterim: (text: string) => void;
   onAutoSubmit: (text: string) => void;
-  silenceMs?: number;       // silence before submit (default 4000ms)
-  minWords?: number;        // minimum words required before auto-submit (default 4)
+  silenceMs?: number;
+  minWords?: number;
+  lang?: string;        // BCP-47 language code e.g. "hi-IN", "es-ES"
 }
 
 export function useSTT({
@@ -52,6 +93,7 @@ export function useSTT({
   onAutoSubmit,
   silenceMs = 4000,
   minWords = 4,
+  lang = "en-US",
 }: STTOptions) {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
@@ -128,7 +170,7 @@ export function useSTT({
     const rec = new (SR as any)();
     rec.continuous = true;
     rec.interimResults = true;
-    rec.lang = "en-US";
+    rec.lang = lang;
 
     rec.onstart = () => setListening(true);
     rec.onerror = () => { clearTimers(); setListening(false); };
