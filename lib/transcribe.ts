@@ -40,7 +40,7 @@ export async function transcribeAudio(
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
   // Groq expects a File object
-  const file = new File([audioBuffer], filename, {
+  const file = new File([new Uint8Array(audioBuffer)], filename, {
     type: filename.endsWith(".ogg") ? "audio/ogg" : filename.endsWith(".mp4") ? "audio/mp4" : "audio/webm",
   });
 

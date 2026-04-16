@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -33,7 +33,7 @@ const CAT_COLORS: Record<string, string> = {
   other:      "bg-secondary text-muted-foreground border-border",
 };
 
-export default function ResumeReportPage() {
+function ResumeReportContent() {
   const searchParams = useSearchParams();
   const selectedId = searchParams.get("id");
   const [resumes, setResumes] = useState<ResumeItem[]>([]);
@@ -508,5 +508,19 @@ export default function ResumeReportPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ResumeReportPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <ResumeReportContent />
+    </Suspense>
   );
 }

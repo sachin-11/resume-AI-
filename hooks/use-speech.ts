@@ -80,6 +80,38 @@ export function useTTS(initialGender: VoiceGender = "male") {
 }
 
 // ── Speech-to-Text ──────────────────────────────────────────────
+// Web Speech API recognition — not in default `lib.dom` typings in all setups
+type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
+
+interface SpeechRecognitionInstance {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: (() => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+interface SpeechRecognitionResultEvent {
+  results: {
+    length: number;
+    [i: number]: {
+      isFinal: boolean;
+      0: { transcript: string };
+    };
+  };
+}
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | undefined {
+  if (typeof window === "undefined") return undefined;
+  const w = window as Window &
+    Partial<{ SpeechRecognition: SpeechRecognitionCtor; webkitSpeechRecognition: SpeechRecognitionCtor }>;
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition;
+}
+
 interface STTOptions {
   onInterim: (text: string) => void;
   onAutoSubmit: (text: string) => void;
@@ -100,7 +132,7 @@ export function useSTT({
   const [countdown, setCountdown] = useState(0);   // seconds remaining
   const [canSubmit, setCanSubmit] = useState(false); // enough words spoken?
 
-  const recRef = useRef<SpeechRecognition | null>(null);
+  const recRef = useRef<SpeechRecognitionInstance | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const accumulatedRef = useRef("");
@@ -109,10 +141,7 @@ export function useSTT({
   useEffect(() => { autoSubmitRef.current = onAutoSubmit; }, [onAutoSubmit]);
 
   useEffect(() => {
-    const SR =
-      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ??
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
-    setSupported(!!SR);
+    setSupported(!!getSpeechRecognitionCtor());
   }, []);
 
   const clearTimers = useCallback(() => {
@@ -158,16 +187,13 @@ export function useSTT({
   }, [silenceMs, minWords, clearTimers]);
 
   const start = useCallback(() => {
-    const SR =
-      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ??
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+    const SR = getSpeechRecognitionCtor();
     if (!SR) return;
 
     accumulatedRef.current = "";
     setCanSubmit(false);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rec = new (SR as any)();
+    const rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = lang;
@@ -176,8 +202,7 @@ export function useSTT({
     rec.onerror = () => { clearTimers(); setListening(false); };
     rec.onend = () => { clearTimers(); setListening(false); };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rec.onresult = (e: any) => {
+    rec.onresult = (e: SpeechRecognitionResultEvent) => {
       let interim = "";
       let final = "";
       for (let i = 0; i < e.results.length; i++) {

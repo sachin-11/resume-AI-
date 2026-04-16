@@ -3,6 +3,16 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
+import type { UserRole } from "@/lib/permissions";
+
+const USER_ROLES: readonly UserRole[] = ["admin", "recruiter", "viewer"];
+
+function normalizeUserRole(value: unknown): UserRole {
+  if (typeof value === "string" && (USER_ROLES as readonly string[]).includes(value)) {
+    return value as UserRole;
+  }
+  return "admin";
+}
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
@@ -95,7 +105,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       if (token && session.user) {
         session.user.id = token.id as string;
-        session.user.role = (token.role as string) ?? "admin";
+        session.user.role = normalizeUserRole(token.role);
         session.user.orgId = (token.orgId as string | null) ?? null;
       }
       return session;

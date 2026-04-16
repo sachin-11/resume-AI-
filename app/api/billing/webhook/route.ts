@@ -45,13 +45,15 @@ export async function POST(req: NextRequest) {
 
         const planId = sub.metadata?.planId ?? "free";
         const isActive = sub.status === "active" || sub.status === "trialing";
+        // current_period_end may not exist on all Stripe SDK versions
+        const periodEnd = (sub as unknown as { current_period_end?: number }).current_period_end;
 
         await db.user.update({
           where: { id: userId },
           data: {
             plan: isActive ? planId : "free",
             stripeSubId: sub.id,
-            planExpiresAt: isActive ? null : new Date(sub.current_period_end * 1000),
+            planExpiresAt: isActive ? null : (periodEnd ? new Date(periodEnd * 1000) : null),
           },
         });
         break;
@@ -62,12 +64,14 @@ export async function POST(req: NextRequest) {
         const userId = sub.metadata?.userId;
         if (!userId) break;
 
+        const periodEnd = (sub as unknown as { current_period_end?: number }).current_period_end;
+
         await db.user.update({
           where: { id: userId },
           data: {
             plan: "free",
             stripeSubId: null,
-            planExpiresAt: new Date(sub.current_period_end * 1000),
+            planExpiresAt: periodEnd ? new Date(periodEnd * 1000) : null,
           },
         });
         break;

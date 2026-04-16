@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Brain, Loader2, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
-export default function CandidateLoginPage() {
+function CandidateLoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const prefillEmail = params.get("email") ?? "";
@@ -105,5 +105,19 @@ export default function CandidateLoginPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function CandidateLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-background flex items-center justify-center p-4">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <CandidateLoginForm />
+    </Suspense>
   );
 }
