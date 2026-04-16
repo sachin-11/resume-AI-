@@ -7,15 +7,15 @@ const WHISPER_MODEL = "whisper-large-v3-turbo"; // Fast + accurate
 // Download audio from S3 as Buffer
 async function downloadFromS3(key: string): Promise<Buffer> {
   const s3 = new S3Client({
-    region: process.env.AWS_REGION ?? "us-east-1",
+    region: process.env.REGION ?? "us-east-1",
     credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY!,
-      secretAccessKey: process.env.AWS_SECRET_KEY!,
+      accessKeyId: process.env.ACCESS_KEY!,
+      secretAccessKey: process.env.SECRET_KEY!,
     },
   });
 
   const command = new GetObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME!,
+    Bucket: process.env.BUCKET_NAME!,
     Key: key,
   });
 
