@@ -16,7 +16,7 @@ function normalizeUserRole(value: unknown): UserRole {
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: process.env.NEXTAUTH_SECRET || "fallback-secret-for-build-only-change-in-production",
   pages: {
     signIn: "/login",
     error: "/login",

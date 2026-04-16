@@ -1,0 +1,20 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm install
+        - npx prisma generate
+    build:
+      commands:
+        - npm run build
+    postBuild:
+      commands:
+        - npx prisma migrate deploy
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
