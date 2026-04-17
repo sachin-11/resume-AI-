@@ -55,7 +55,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [sessionId, token]);
 
-  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender } = useTTS("male");
+  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender } = useTTS("male", LANGUAGES[language]?.sttCode?.split("-")[0] ?? "en");
   const lastSpokenId = useRef("");
   const prevSpeaking = useRef(false);
 
@@ -212,6 +212,17 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
     setSubmitting(true);
     setMessages((p) => [...p, { id: `user-${Date.now()}`, role: "user", content: text.trim() }]);
 
+    // ── End intent detection ──
+    const endPhrases = /\b(end|finish|stop|quit|done|that'?s? all|i'?m done|wrap up|let'?s end|can we end|want to end|would like to end|please end)\b/i;
+    if (endPhrases.test(text.trim())) {
+      const goodbye = `Thank you so much for your time${candidateName ? `, ${candidateName.split(" ")[0]}` : ""}! It was a pleasure speaking with you. Your responses have been recorded — you'll receive your feedback shortly. Best of luck! 🎉`;
+      setMessages((p) => [...p, { id: "goodbye", role: "assistant", content: goodbye }]);
+      setSubmitting(false);
+      setDone(true);
+      setTimeout(() => handleFinish(), ttsEnabled ? 4000 : 1500);
+      return;
+    }
+
     await fetch("/api/interview/public/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -224,7 +235,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
       setCurrentIndex(next);
     } else {
       setDone(true);
-      doneRef.current = false; // still need to click Submit — not done yet
+      doneRef.current = false;
       setMessages((p) => [...p, {
         id: "done", role: "assistant",
         content: `Excellent work${candidateName ? `, ${candidateName.split(" ")[0]}` : ""}! You've completed all the questions. Your responses have been recorded. Click 'Submit Interview' to finish.`,

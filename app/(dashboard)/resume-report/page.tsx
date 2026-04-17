@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   FileText, Loader2, CheckCircle, AlertCircle, Lightbulb,
   TrendingUp, ArrowRight, User, Briefcase, GraduationCap,
-  Code2, FolderGit2, Award, Search, X, ChevronDown, ChevronUp,
+  Code2, FolderGit2, Award, Search, X, ChevronDown, ChevronUp, Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +39,7 @@ function ResumeReportContent() {
   const [resumes, setResumes] = useState<ResumeItem[]>([]);
   const [selected, setSelected] = useState<ResumeItem | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState("");
 
   // ATS match state
   const [jd, setJd] = useState("");
@@ -67,6 +68,18 @@ function ResumeReportContent() {
       })
       .finally(() => setLoading(false));
   }, [selectedId]);
+
+  async function handleDelete(id: string) {
+    if (!confirm("Delete this resume? This cannot be undone.")) return;
+    setDeletingId(id);
+    const res = await fetch(`/api/resume/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      const updated = resumes.filter((r) => r.id !== id);
+      setResumes(updated);
+      if (selected?.id === id) setSelected(updated[0] ?? null);
+    }
+    setDeletingId("");
+  }
 
   async function handleAtsMatch() {
     if (!selected || !jd.trim()) return;
@@ -120,31 +133,42 @@ function ResumeReportContent() {
         {/* Resume List */}
         <div className="space-y-2">
           {resumes.map((r) => (
-            <button key={r.id} onClick={() => setSelected(r)}
-              className={`w-full text-left rounded-lg border p-3 transition-all ${
-                selected?.id === r.id ? "border-violet-500 bg-violet-500/5" : "border-border hover:bg-accent"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{r.fileName}</p>
-                  <p className="text-xs text-muted-foreground">{formatDate(r.createdAt)}</p>
+            <div key={r.id} className={`group relative rounded-lg border transition-all ${
+              selected?.id === r.id ? "border-violet-500 bg-violet-500/5" : "border-border hover:bg-accent"
+            }`}>
+              <button className="w-full text-left p-3" onClick={() => setSelected(r)}>
+                <div className="flex items-center gap-2 pr-6">
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{r.fileName}</p>
+                    <p className="text-xs text-muted-foreground">{formatDate(r.createdAt)}</p>
+                  </div>
                 </div>
-              </div>
-              {r.analysisReport && (
-                <div className="mt-2 flex items-center gap-2">
-                  <span className={`text-xs font-bold ${getScoreColor(r.analysisReport.overallScore)}`}>
-                    {r.analysisReport.overallScore}/100
-                  </span>
-                  {r.analysisReport.atsMatch && (
-                    <span className={`text-xs font-bold ${getScoreColor(r.analysisReport.atsMatch.score)}`}>
-                      ATS {r.analysisReport.atsMatch.score}%
+                {r.analysisReport && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className={`text-xs font-bold ${getScoreColor(r.analysisReport.overallScore)}`}>
+                      {r.analysisReport.overallScore}/100
                     </span>
-                  )}
-                </div>
-              )}
-            </button>
+                    {r.analysisReport.atsMatch && (
+                      <span className={`text-xs font-bold ${getScoreColor(r.analysisReport.atsMatch.score)}`}>
+                        ATS {r.analysisReport.atsMatch.score}%
+                      </span>
+                    )}
+                  </div>
+                )}
+              </button>
+              {/* Delete button */}
+              <button
+                onClick={() => handleDelete(r.id)}
+                disabled={deletingId === r.id}
+                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400"
+                title="Delete resume"
+              >
+                {deletingId === r.id
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Trash2 className="h-3.5 w-3.5" />}
+              </button>
+            </div>
           ))}
         </div>
 

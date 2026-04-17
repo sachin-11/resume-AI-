@@ -25,6 +25,7 @@ interface Question {
 interface SessionData {
   id: string; title: string; role: string;
   difficulty: string; roundType: string; status: string;
+  language: string;
   questions: Question[];
 }
 interface ChatMessage { id: string; role: "assistant" | "user"; content: string; source?: "resume" | "general"; }
@@ -41,6 +42,7 @@ export default function InterviewSessionPage() {
   const [finishing, setFinishing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [done, setDone] = useState(false);
+  const [warmup, setWarmup] = useState(true);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
@@ -61,7 +63,7 @@ export default function InterviewSessionPage() {
   const submitRef = useRef<((text: string) => void) | null>(null);
 
   // ── TTS ──────────────────────────────────────────────────────
-  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender } = useTTS("male");
+  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender } = useTTS("male", session?.language?.split("-")[0] ?? "en");
   const lastSpokenId = useRef("");
 
   // ── Camera ───────────────────────────────────────────────────
@@ -70,7 +72,7 @@ export default function InterviewSessionPage() {
   useEffect(() => {
     if (!ttsEnabled) return;
     const last = messages[messages.length - 1];
-    if (last?.role === "assistant" && last.id !== lastSpokenId.current) {
+    if (last?.role === "assistant" && last.id !== lastSpokenId.current && last.id !== "feedback-error") {
       lastSpokenId.current = last.id;
       speak(last.content);
     }
@@ -99,10 +101,40 @@ export default function InterviewSessionPage() {
     setAnswer("");
     setSubmitting(true);
 
-    // Capture current session state via ref to avoid stale closure
+    setMessages((p) => [...p, { id: `user-${Date.now()}`, role: "user", content: text.trim() }]);
+
+    // ── Warmup phase: candidate replied to greeting → start Q1 ──
+    if (warmup) {
+      setWarmup(false);
+      const q0 = session.questions[0];
+      setTimeout(() => {
+        setMessages((p) => [...p, {
+          id: "warmup-bridge", role: "assistant",
+          content: "Great! Let's get started with the interview. Here's your first question:",
+        }]);
+        setTimeout(() => {
+          setMessages((p) => [...p, { id: `q-${q0.id}`, role: "assistant", content: q0.text, source: q0.source }]);
+          setCurrentIndex(0);
+          setSubmitting(false);
+        }, 600);
+      }, 400);
+      return;
+    }
+
+    // ── Normal interview flow ──
     const currentQ = session.questions[currentIndex];
 
-    setMessages((p) => [...p, { id: `user-${Date.now()}`, role: "user", content: text.trim() }]);
+    // ── End intent detection ──
+    const endPhrases = /\b(end|finish|stop|quit|done|that'?s? all|i'?m done|wrap up|let'?s end|can we end|want to end|would like to end|please end)\b/i;
+    if (endPhrases.test(text.trim())) {
+      const goodbye = "Thank you so much for your time today! It was a pleasure speaking with you. Your responses have been recorded — you'll receive your feedback shortly. Best of luck! 🎉";
+      setMessages((p) => [...p, { id: "goodbye", role: "assistant", content: goodbye }]);
+      setSubmitting(false);
+      setDone(true);
+      // Auto-end after AI finishes saying goodbye
+      setTimeout(() => handleEndInterview(), ttsEnabled ? 4000 : 1500);
+      return;
+    }
 
     const res = await fetch("/api/interview/answer", {
       method: "POST",
@@ -132,7 +164,7 @@ export default function InterviewSessionPage() {
     if (!ttsEnabled && micSupported && !done) {
       setTimeout(() => startMic(), 400);
     }
-  }, [session, currentIndex, id, stopMic, stopSpeaking, ttsEnabled, micSupported, done, startMic]);
+  }, [session, currentIndex, id, warmup, stopMic, stopSpeaking, ttsEnabled, micSupported, done, startMic]);
 
   // ── Auto-restart mic after AI finishes speaking ──────────────
   // When TTS stops speaking AND we're not submitting AND not done → restart mic
@@ -155,14 +187,15 @@ export default function InterviewSessionPage() {
         const s: SessionData = d.session;
         setSession(s);
 
-        // Extract candidate name from user session
         const candidateName: string = d.session.user?.name ?? "";
         const firstName = candidateName.split(" ")[0] ?? "";
 
+        // Warmup greeting — no question yet
         const msgs: ChatMessage[] = [{
           id: "intro", role: "assistant",
-          content: `Hello${firstName ? ` ${firstName}` : ""}! Welcome to your ${getRoundTypeLabel(s.roundType)}. I'll be your AI interviewer today. I've reviewed your background and prepared ${s.questions.length} questions for you. Take your time with each answer. Let's begin!`,
+          content: `Hello${firstName ? `, ${firstName}` : ""}! I'm your AI interviewer today. How are you feeling? Are you ready to begin?`,
         }];
+
         const qs = d.session.questions as Array<Question & { answers: Array<{ text: string }> }>;
         let lastAnswered = -1;
         qs.forEach((q, i) => {
@@ -172,11 +205,20 @@ export default function InterviewSessionPage() {
             lastAnswered = i;
           }
         });
-        const next = lastAnswered + 1;
-        if (next < s.questions.length) {
-          msgs.push({ id: `q-${s.questions[next].id}`, role: "assistant", content: s.questions[next].text, source: s.questions[next].source });
-          setCurrentIndex(next);
-        } else setDone(true);
+
+        if (lastAnswered >= 0) {
+          // Resuming session — skip warmup, show next question directly
+          setWarmup(false);
+          const next = lastAnswered + 1;
+          if (next < s.questions.length) {
+            msgs.push({ id: `q-${s.questions[next].id}`, role: "assistant", content: s.questions[next].text, source: s.questions[next].source });
+            setCurrentIndex(next);
+          } else {
+            setDone(true);
+          }
+        }
+        // New session — warmup=true, no question pushed yet
+
         setMessages(msgs);
       })
       .finally(() => setLoading(false));
@@ -189,16 +231,25 @@ export default function InterviewSessionPage() {
   async function handleEndInterview() {
     stopMic(); stopSpeaking(); setFinishing(true);
     doneRef.current = true;
+
+    // Mark session complete
     await fetch("/api/interview/complete", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId: id }),
     });
+
+    // Try to generate feedback — if no answers, just go to history
     const res = await fetch("/api/feedback/generate", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId: id }),
     });
-    if (res.ok) router.push(`/feedback/${id}`);
-    else setFinishing(false);
+
+    if (res.ok) {
+      router.push(`/feedback/${id}`);
+    } else {
+      // No answers or error — go to history instead
+      router.push("/history");
+    }
   }
 
   const totalQ = session?.questions.length ?? 0;

@@ -346,3 +346,34 @@ export async function sendTeamInvite({
     html: emailShell("👥", "Team Invitation", `${inviterName} invited you to ${orgName}`, body),
   });
 }
+
+export async function sendPasswordResetEmail({
+  to,
+  name,
+  resetLink,
+}: {
+  to: string;
+  name: string;
+  resetLink: string;
+}) {
+  const transporter = getTransporter();
+  await transporter.sendMail({
+    from: `"AI Resume Coach" <${process.env.SMTP_USER}>`,
+    to,
+    subject: "Reset your password",
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#e2e8f0;margin:0;padding:40px 20px;">
+  <div style="max-width:480px;margin:0 auto;background:#111118;border:1px solid #1e1e2e;border-radius:16px;padding:40px;">
+    <h2 style="color:#fff;margin:0 0 8px">Reset your password</h2>
+    <p style="color:#94a3b8;margin:0 0 24px">Hi ${name || "there"}, click the button below to reset your password. This link expires in 1 hour.</p>
+    <a href="${resetLink}" style="display:inline-block;background:#7c3aed;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Reset Password</a>
+    <p style="color:#64748b;font-size:12px;margin:24px 0 0">If you didn't request this, ignore this email. Your password won't change.</p>
+    <p style="color:#64748b;font-size:11px;margin:8px 0 0;word-break:break-all;">Or copy: ${resetLink}</p>
+  </div>
+</body>
+</html>`,
+  });
+}

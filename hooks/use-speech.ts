@@ -13,25 +13,25 @@ const FEMALE_KEYWORDS = ["female", "woman", "girl", "zira", "samantha", "victori
 const MALE_KEYWORDS = ["male", "man", "guy", "david", "mark", "daniel", "alex",
   "fred", "jorge", "diego", "google uk english male"];
 
-function pickVoice(gender: VoiceGender): SpeechSynthesisVoice | null {
+function pickVoice(gender: VoiceGender, lang = "en"): SpeechSynthesisVoice | null {
   if (typeof window === "undefined" || !window.speechSynthesis) return null;
-  const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
-  if (voices.length === 0) return null;
+  const allVoices = window.speechSynthesis.getVoices();
+  if (allVoices.length === 0) return null;
+
+  const langPrefix = lang.split("-")[0]; // "hi" from "hi-IN", "en" from "en-US"
+
+  // Filter voices matching the language
+  const langVoices = allVoices.filter((v) => v.lang.startsWith(langPrefix));
+  const pool = langVoices.length > 0 ? langVoices : allVoices.filter((v) => v.lang.startsWith("en"));
 
   const keywords = gender === "female" ? FEMALE_KEYWORDS : MALE_KEYWORDS;
-
-  // Try keyword match first
-  const matched = voices.find((v) =>
+  const matched = pool.find((v) =>
     keywords.some((kw) => v.name.toLowerCase().includes(kw))
   );
-  if (matched) return matched;
-
-  // Fallback: pitch-based guess — female voices tend to have higher pitch names
-  // Just return first English voice as last resort
-  return voices[0];
+  return matched ?? pool[0] ?? null;
 }
 
-export function useTTS(initialGender: VoiceGender = "male") {
+export function useTTS(initialGender: VoiceGender = "male", lang = "en") {
   const [speaking, setSpeaking] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [voiceGender, setVoiceGender] = useState<VoiceGender>(initialGender);
@@ -51,12 +51,13 @@ export function useTTS(initialGender: VoiceGender = "male") {
       utterance.rate = 0.92;
       utterance.volume = 1;
 
-      const voice = pickVoice(voiceGender);
+      const voice = pickVoice(voiceGender, lang);
       if (voice) {
         utterance.voice = voice;
-        // Adjust pitch to reinforce gender feel
+        utterance.lang = voice.lang; // set utterance lang to match voice
         utterance.pitch = voiceGender === "female" ? 1.2 : 0.85;
       } else {
+        utterance.lang = lang.includes("-") ? lang : `${lang}-IN`;
         utterance.pitch = voiceGender === "female" ? 1.2 : 0.85;
       }
 

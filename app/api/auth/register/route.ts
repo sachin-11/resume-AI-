@@ -19,18 +19,17 @@ export async function POST(req: NextRequest) {
     }
 
     const { name, email, password } = parsed.data;
+    const phone: string | undefined = body?.phone;
+    const phoneVerified: boolean = body?.phoneVerified === true;
 
     const existing = await db.user.findUnique({ where: { email } });
     if (existing) {
-      return NextResponse.json(
-        { error: "Email already registered" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "Email already registered" }, { status: 409 });
     }
 
     const hashed = await bcrypt.hash(password, 12);
     const user = await db.user.create({
-      data: { name, email, password: hashed },
+      data: { name, email, password: hashed, ...(phone ? { phone, phoneVerified } : {}) },
       select: { id: true, email: true, name: true },
     });
 

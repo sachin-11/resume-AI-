@@ -1,17 +1,20 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Loader2, Save, Plus, X } from "lucide-react";
+import { Loader2, Save, Plus, X, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PhoneOtpVerifier } from "@/components/auth/phone-otp";
 
 interface UserSettings {
   id: string;
   name: string;
   email: string;
+  phone: string | null;
+  phoneVerified: boolean;
   targetRole: string | null;
   techStack: string[];
   experienceYears: number | null;
@@ -169,6 +172,31 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Phone Verification */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-violet-500" />
+            Phone Verification
+          </CardTitle>
+          <CardDescription>Verify your phone number for added security</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {settings.phoneVerified && settings.phone ? (
+            <div className="flex items-center gap-3 rounded-lg bg-green-500/10 border border-green-500/20 px-4 py-3">
+              <ShieldCheck className="h-5 w-5 text-green-500 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-green-400">Phone verified</p>
+                <p className="text-xs text-muted-foreground">{settings.phone}</p>
+              </div>
+              <Badge variant="success" className="ml-auto">Verified</Badge>
+            </div>
+          ) : (
+            <PhoneOtpVerifier onVerified={(phone) => setSettings({ ...settings, phone, phoneVerified: true })} />
+          )}
         </CardContent>
       </Card>
 

@@ -47,9 +47,17 @@ export async function POST(req: NextRequest) {
         candidateAnswer: q.answers[0].text,
       }));
 
+    // No answers at all — don't generate fake feedback
+    if (qa.length === 0) {
+      return NextResponse.json(
+        { error: "No answers found. Please complete the interview before generating feedback." },
+        { status: 400 }
+      );
+    }
+
     let feedback: FeedbackReport;
 
-    if (!process.env.GROQ_API_KEY || qa.length === 0) {
+    if (!process.env.GROQ_API_KEY) {
       feedback = MOCK_FEEDBACK;
     } else {
       const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(qa));

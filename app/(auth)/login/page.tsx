@@ -23,6 +23,10 @@ function LoginForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Client-side validation
+    if (!email) { setError("Email is required"); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError("Enter a valid email address"); return; }
+    if (!password) { setError("Password is required"); return; }
     setLoading(true);
     setError("");
 
@@ -113,7 +117,12 @@ function LoginForm() {
                   value={email} onChange={(e) => setEmail(e.target.value)} required />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  <Link href="/forgot-password" className="text-xs text-violet-500 hover:underline">
+                    Forgot password?
+                  </Link>
+                </div>
                 <div className="relative">
                   <Input id="password" type={showPassword ? "text" : "password"}
                     placeholder="••••••••" value={password}
