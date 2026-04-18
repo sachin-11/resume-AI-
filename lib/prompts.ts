@@ -100,6 +100,7 @@ export function questionGenerationPrompt(params: {
   count: number;
   language?: string;
   personaPrompt?: string;
+  ragContext?: string;
 }): string {
   const hasResume = params.resumeText.trim().length > 50;
   const resumeCount = hasResume ? Math.max(1, Math.round(params.count * 0.6)) : 0;
@@ -111,6 +112,11 @@ export function questionGenerationPrompt(params: {
 
   const personaNote = params.personaPrompt
     ? `\nINTERVIEWER PERSONA:\n${params.personaPrompt}\n`
+    : "";
+
+  // RAG context injected here for richer, more personalized questions
+  const ragNote = params.ragContext
+    ? `\n${params.ragContext}\n`
     : "";
 
   const resumeSection = hasResume
@@ -132,7 +138,7 @@ Label each with "source": "general"
 `;
 
   return `Generate exactly ${params.count} ${params.difficulty} level ${params.roundType} interview questions for a ${params.role} candidate.
-${langNote}${personaNote}${resumeSection}
+${langNote}${personaNote}${ragNote}${resumeSection}
 ${generalSection}
 
 Return a single JSON array of exactly ${params.count} objects, resume-based questions first:
@@ -157,7 +163,7 @@ IMPORTANT: Return ONLY the JSON array. No extra text.`;
 export const FEEDBACK_SYSTEM = `You are an expert interview coach who provides detailed, constructive feedback. 
 Analyze interview performance objectively and provide actionable improvement advice. Always respond with valid JSON only.`;
 
-export function feedbackPrompt(qa: Array<{ question: string; answer: string; candidateAnswer?: string }>, language = "en"): string {
+export function feedbackPrompt(qa: Array<{ question: string; answer: string; candidateAnswer?: string }>, language = "en", ragContext = ""): string {
   const formatted = qa
     .map((item, i) => `Q${i + 1}: ${item.question}\nA${i + 1}: ${item.candidateAnswer ?? item.answer}`)
     .join("\n\n");
@@ -166,7 +172,9 @@ export function feedbackPrompt(qa: Array<{ question: string; answer: string; can
     ? `\nLANGUAGE: Write ALL text fields (summary, strengths, weakAreas, improvementRoadmap, betterAnswers text) in ${language === "hi" ? "Hindi (हिंदी)" : language === "es" ? "Spanish (Español)" : "French (Français)"}.\n`
     : "";
 
-  return `Evaluate this interview performance and return JSON:${langNote}
+  const ragNote = ragContext ? `\n${ragContext}\n` : "";
+
+  return `Evaluate this interview performance and return JSON:${langNote}${ragNote}
 {
   "overallScore": 75,
   "technicalScore": 70,

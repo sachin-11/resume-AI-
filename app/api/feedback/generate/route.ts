@@ -7,6 +7,7 @@ import { FEEDBACK_SYSTEM, feedbackPrompt } from "@/lib/prompts";
 import { safeJsonParse } from "@/lib/utils";
 import { FeedbackReport } from "@/types";
 import { MOCK_FEEDBACK } from "@/lib/mockData";
+import { buildFeedbackRAGContext } from "@/lib/rag";
 
 export async function POST(req: NextRequest) {
   try {
@@ -39,18 +40,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ feedback: existing });
     }
 
+    // Skipped/meaningless answers filter karo
+    const SKIP_PATTERNS = /^\[skipped\]$|^(no|yes|ok|okay|skip|idk|na|n\/a|\.+|-+)$/i;
+    const MIN_ANSWER_WORDS = 3;
+
     const qa = interviewSession.questions
       .filter((q) => q.answers.length > 0)
       .map((q) => ({
         question: q.text,
         answer: q.answers[0].text,
         candidateAnswer: q.answers[0].text,
+        skipped: SKIP_PATTERNS.test(q.answers[0].text.trim()) ||
+                 q.answers[0].text.trim().split(/\s+/).length < MIN_ANSWER_WORDS,
       }));
 
-    // No answers at all — don't generate fake feedback
-    if (qa.length === 0) {
+    const realAnswers = qa.filter((q) => !q.skipped);
+    const skippedCount = qa.length - realAnswers.length;
+
+    // No meaningful answers at all
+    if (realAnswers.length === 0) {
       return NextResponse.json(
-        { error: "No answers found. Please complete the interview before generating feedback." },
+        { error: "No meaningful answers found. Please answer at least one question properly before generating feedback." },
         { status: 400 }
       );
     }
@@ -60,7 +70,19 @@ export async function POST(req: NextRequest) {
     if (!process.env.GROQ_API_KEY) {
       feedback = MOCK_FEEDBACK;
     } else {
-      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(qa));
+      // ── RAG: retrieve resume context for better feedback ──
+      const ragContext = await buildFeedbackRAGContext(
+        session.user.id,
+        interviewSession.role,
+        realAnswers
+      );
+
+      // Tell AI about skipped questions so score reflects reality
+      const skippedNote = skippedCount > 0
+        ? `\nNOTE: ${skippedCount} out of ${qa.length} questions were skipped or not answered properly. Factor this into the scores — skipped questions should significantly lower the technical and overall scores.\n`
+        : "";
+
+      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(realAnswers, "en", ragContext + skippedNote));
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 

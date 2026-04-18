@@ -2,107 +2,76 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import * as XLSX from "xlsx";
 
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id: campaignId } = await params;
-  const format = req.nextUrl.searchParams.get("format") ?? "csv"; // csv | xlsx
-
+  const { id } = await params;
   const campaign = await db.interviewCampaign.findFirst({
-    where: { id: campaignId, userId: session.user.id },
+    where: { id, userId: session.user.id },
   });
   if (!campaign) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const invites = await db.candidateInvite.findMany({
-    where: { campaignId },
+    where: { campaignId: id },
     orderBy: { createdAt: "desc" },
   });
 
-  // Fetch feedback for each
-  const rows = await Promise.all(
-    invites.map(async (inv) => {
-      let feedback = null;
-      if (inv.sessionId) {
-        feedback = await db.feedbackReport.findUnique({
+  // Fetch scores
+  const rows = await Promise.all(invites.map(async (inv) => {
+    let score = "";
+    let technical = "";
+    let communication = "";
+    let confidence = "";
+    let integrityFlag = "";
+
+    if (inv.sessionId) {
+      const [feedback, sess] = await Promise.all([
+        db.feedbackReport.findUnique({
           where: { sessionId: inv.sessionId },
-          select: {
-            overallScore: true, technicalScore: true,
-            communicationScore: true, confidenceScore: true,
-            strengths: true, weakAreas: true, summary: true,
-          },
-        });
-        const sessionData = await db.interviewSession.findUnique({
+          select: { overallScore: true, technicalScore: true, communicationScore: true, confidenceScore: true },
+        }),
+        db.interviewSession.findUnique({
           where: { id: inv.sessionId },
-          select: { tabSwitchCount: true },
-        });
-        return {
-          "Name":               inv.name ?? "",
-          "Email":              inv.email,
-          "Status":             inv.status,
-          "Scheduled At":       inv.scheduledAt ? new Date(inv.scheduledAt).toLocaleString() : "",
-          "Completed At":       inv.sessionId ? new Date(inv.createdAt).toLocaleString() : "",
-          "Overall Score":      feedback?.overallScore ?? "",
-          "Technical Score":    feedback?.technicalScore ?? "",
-          "Communication":      feedback?.communicationScore ?? "",
-          "Confidence":         feedback?.confidenceScore ?? "",
-          "Tab Switches":       sessionData?.tabSwitchCount ?? 0,
-          "Strengths":          feedback?.strengths?.join("; ") ?? "",
-          "Weak Areas":         feedback?.weakAreas?.join("; ") ?? "",
-          "Summary":            feedback?.summary ?? "",
-          "Pass/Fail":          feedback ? (feedback.overallScore >= 60 ? "Pass" : "Fail") : "",
-        };
+          select: { integrityFlag: true, tabSwitchCount: true },
+        }),
+      ]);
+      if (feedback) {
+        score = String(feedback.overallScore);
+        technical = String(feedback.technicalScore);
+        communication = String(feedback.communicationScore);
+        confidence = String(feedback.confidenceScore);
       }
-      return {
-        "Name":               inv.name ?? "",
-        "Email":              inv.email,
-        "Status":             inv.status,
-        "Scheduled At":       inv.scheduledAt ? new Date(inv.scheduledAt).toLocaleString() : "",
-        "Completed At":       "",
-        "Overall Score":      "",
-        "Technical Score":    "",
-        "Communication":      "",
-        "Confidence":         "",
-        "Tab Switches":       0,
-        "Strengths":          "",
-        "Weak Areas":         "",
-        "Summary":            "",
-        "Pass/Fail":          "",
-      };
-    })
-  );
+      if (sess) integrityFlag = sess.integrityFlag;
+    }
 
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Results");
+    return [
+      inv.name ?? "",
+      inv.email,
+      inv.status,
+      score,
+      technical,
+      communication,
+      confidence,
+      integrityFlag,
+      inv.emailSent ? "Yes" : "No",
+      new Date(inv.createdAt).toLocaleDateString("en-IN"),
+    ];
+  }));
 
-  // Auto column widths
-  const colWidths = Object.keys(rows[0] ?? {}).map((k) => ({ wch: Math.max(k.length, 15) }));
-  ws["!cols"] = colWidths;
+  const headers = ["Name", "Email", "Status", "Overall Score", "Technical", "Communication", "Confidence", "Integrity", "Email Sent", "Invited On"];
+  const csv = [headers, ...rows]
+    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
 
-  const filename = `${campaign.title.replace(/\s+/g, "_")}_results`;
-
-  if (format === "xlsx") {
-    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-    return new NextResponse(buf, {
-      headers: {
-        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename="${filename}.xlsx"`,
-      },
-    });
-  }
-
-  // CSV
-  const csv = XLSX.utils.sheet_to_csv(ws);
   return new NextResponse(csv, {
     headers: {
       "Content-Type": "text/csv",
-      "Content-Disposition": `attachment; filename="${filename}.csv"`,
+      "Content-Disposition": `attachment; filename="${campaign.title.replace(/[^a-z0-9]/gi, "_")}_candidates.csv"`,
     },
   });
 }

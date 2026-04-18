@@ -29,6 +29,7 @@ export default function UploadResumePage() {
     }
     setFile(f);
     setError("");
+    setStage("idle");
   };
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -90,11 +91,15 @@ export default function UploadResumePage() {
           {/* Drop Zone */}
           <div
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
+            onDragLeave={(e) => { e.preventDefault(); setDragging(false); }}
             onDrop={onDrop}
-            onClick={() => document.getElementById("file-input")?.click()}
-            className={`relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 cursor-pointer transition-all ${
-              dragging ? "border-violet-500 bg-violet-500/5" : "border-border hover:border-violet-500/50 hover:bg-accent/50"
+            onClick={() => !file && document.getElementById("file-input")?.click()}
+            className={`relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 transition-all ${
+              dragging
+                ? "border-violet-500 bg-violet-500/10 scale-[1.01]"
+                : file
+                ? "border-violet-500/50 bg-violet-500/5 cursor-default"
+                : "border-border hover:border-violet-500/50 hover:bg-accent/50 cursor-pointer"
             }`}
           >
             <input
@@ -104,26 +109,44 @@ export default function UploadResumePage() {
               className="hidden"
               onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
             />
-            {file ? (
-              <div className="flex items-center gap-3">
-                <FileText className="h-8 w-8 text-violet-500" />
-                <div>
-                  <p className="font-medium">{file.name}</p>
-                  <p className="text-sm text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</p>
+            {dragging ? (
+              <div className="flex flex-col items-center gap-2 pointer-events-none">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-500/20 border-2 border-violet-500/50">
+                  <Upload className="h-8 w-8 text-violet-400 animate-bounce" />
+                </div>
+                <p className="font-semibold text-violet-400">Drop to upload!</p>
+              </div>
+            ) : file ? (
+              <div className="flex items-center gap-4 w-full max-w-sm">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-violet-500/15">
+                  <FileText className="h-6 w-6 text-violet-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{file.name}</p>
+                  <p className="text-sm text-muted-foreground">{(file.size / 1024).toFixed(1)} KB · {file.type.includes("pdf") ? "PDF" : "DOCX"}</p>
                 </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setFile(null); setStage("idle"); }}
-                  className="ml-2 text-muted-foreground hover:text-foreground"
+                  onClick={(e) => { e.stopPropagation(); setFile(null); setStage("idle"); setError(""); }}
+                  className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
             ) : (
-              <>
-                <Upload className="h-10 w-10 text-muted-foreground/50 mb-3" />
-                <p className="font-medium">Drop your resume here</p>
-                <p className="text-sm text-muted-foreground mt-1">or click to browse files</p>
-              </>
+              <div className="flex flex-col items-center gap-3 pointer-events-none">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary">
+                  <Upload className="h-8 w-8 text-muted-foreground/50" />
+                </div>
+                <div className="text-center">
+                  <p className="font-medium">Drop your resume here</p>
+                  <p className="text-sm text-muted-foreground mt-1">or <span className="text-violet-500 underline underline-offset-2">click to browse</span></p>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-muted-foreground">PDF</span>
+                  <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-muted-foreground">DOCX</span>
+                  <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-muted-foreground">Max 5MB</span>
+                </div>
+              </div>
             )}
           </div>
 

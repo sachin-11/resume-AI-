@@ -1,14 +1,16 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, MessageSquare, BookOpen, Plus, X, Check } from "lucide-react";
+import { Loader2, MessageSquare, BookOpen, Plus, X, Check, Zap, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { PERSONAS, PERSONA_CATEGORIES, DEFAULT_PERSONA_ID } from "@/lib/personas";
+import Link from "next/link";
 
 interface Resume { id: string; fileName: string }
 interface BankQuestion { id: string; text: string; category: string; difficulty: string; tags: string[] }
@@ -28,6 +30,8 @@ export default function InterviewSetupPage() {
   const [selectedCustomIds, setSelectedCustomIds] = useState<string[]>([]);
   const [showBank, setShowBank] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [limitError, setLimitError] = useState("");
+  const [billing, setBilling] = useState<{ plan: string; remaining: number | null; used: number } | null>(null);
   const [form, setForm] = useState({
     resumeId: "", role: "", difficulty: "intermediate",
     roundType: "technical", questionCount: 5,
@@ -37,6 +41,9 @@ export default function InterviewSetupPage() {
   useEffect(() => {
     fetch("/api/resume/list").then((r) => r.json()).then((d) => setResumes(d.resumes ?? []));
     fetch("/api/question-bank").then((r) => r.json()).then((d) => setBankQuestions(d.questions ?? []));
+    fetch("/api/billing/status").then((r) => r.json()).then((d) => {
+      setBilling({ plan: d.plan, remaining: d.remaining, used: d.interviewsThisMonth });
+    });
   }, []);
 
   function toggleQuestion(id: string) {
@@ -61,7 +68,10 @@ export default function InterviewSetupPage() {
     });
     const data = await res.json();
     if (res.ok) router.push(`/interview/session/${data.session.id}`);
-    else setLoading(false);
+    else {
+      if (data.limitReached) setLimitError(data.error);
+      setLoading(false);
+    }
   }
 
   const roundTypes = [
@@ -79,6 +89,49 @@ export default function InterviewSetupPage() {
         <h1 className="text-2xl font-bold">Setup Interview</h1>
         <p className="text-muted-foreground mt-1">Configure your mock interview session</p>
       </div>
+
+      {/* ── Usage / Limit Banner ── */}
+      {billing && billing.plan === "free" && (
+        <div className={`rounded-xl border px-4 py-3 ${
+          (billing.remaining ?? 0) === 0
+            ? "border-red-500/40 bg-red-500/10"
+            : (billing.remaining ?? 0) <= 2
+            ? "border-yellow-500/40 bg-yellow-500/10"
+            : "border-border bg-secondary/30"
+        }`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">
+                {(billing.remaining ?? 0) === 0
+                  ? "Monthly limit reached"
+                  : `${billing.remaining} interview${billing.remaining !== 1 ? "s" : ""} remaining this month`}
+              </span>
+            </div>
+            <Link href="/billing">
+              <Badge className="bg-violet-600 hover:bg-violet-700 text-white cursor-pointer gap-1">
+                <Crown className="h-3 w-3" /> Upgrade
+              </Badge>
+            </Link>
+          </div>
+          <Progress value={(billing.used / 5) * 100} className="h-1.5" />
+          <p className="text-xs text-muted-foreground mt-1.5">{billing.used}/5 interviews used · Resets monthly</p>
+        </div>
+      )}
+
+      {/* ── Limit Reached Block ── */}
+      {limitError && (
+        <Card className="border-red-500/40 bg-red-500/5">
+          <CardContent className="p-6 text-center space-y-3">
+            <Zap className="h-10 w-10 text-red-400 mx-auto" />
+            <p className="font-semibold text-red-400">Monthly Limit Reached</p>
+            <p className="text-sm text-muted-foreground">{limitError}</p>
+            <Button asChild>
+              <Link href="/billing"><Crown className="h-4 w-4" /> Upgrade to Pro</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -273,9 +326,12 @@ export default function InterviewSetupPage() {
             </div>
           )}
 
-          <Button className="w-full" size="lg" onClick={handleStart} disabled={!form.role || loading}>
+          <Button className="w-full" size="lg" onClick={handleStart}
+            disabled={!form.role || loading || (billing?.plan === "free" && (billing?.remaining ?? 1) === 0)}>
             {loading
               ? <><Loader2 className="h-4 w-4 animate-spin" />Generating Questions…</>
+              : (billing?.plan === "free" && (billing?.remaining ?? 1) === 0)
+              ? <><Zap className="h-4 w-4" />Limit Reached — Upgrade to Continue</>
               : <><MessageSquare className="h-4 w-4" />Start Interview</>}
           </Button>
         </CardContent>

@@ -38,6 +38,9 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
   const bottomRef = useRef<HTMLDivElement>(null);
   const submitRef = useRef<((t: string) => void) | null>(null);
   const doneRef = useRef(false); // track if completed to skip abandon
+  const listeningRef = useRef(false);
+  const speakingRef = useRef(false);
+  const submittingRef = useRef(false);
 
   // ── Abandon on tab close ─────────────────────────────────────
   useEffect(() => {
@@ -162,13 +165,17 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
 
   const handleInterim = useCallback((t: string) => setAnswer(t), []);
   const handleAutoSubmit = useCallback((t: string) => submitRef.current?.(t), []);
-  const { start: startMic, stop: stopMic, listening, supported: micSupported, countdown, canSubmit, cancelAutoSubmit } = useSTT({
+  const { start: startMic, stop: stopMic, listening, supported: micSupported, countdown, canSubmit, cancelAutoSubmit, sttError, clearSttError } = useSTT({
     onInterim: handleInterim,
     onAutoSubmit: handleAutoSubmit,
     silenceMs: 4000,
     minWords: 4,
     lang: LANGUAGES[language]?.sttCode ?? "en-US",
   });
+
+  listeningRef.current = listening;
+  speakingRef.current = speaking;
+  submittingRef.current = submitting;
 
   // Auto-restart mic after AI finishes speaking
   useEffect(() => {
@@ -178,6 +185,21 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
     }
     prevSpeaking.current = speaking;
   }, [speaking, submitting, done, micSupported, listening, startMic]);
+
+  // AI voice off: start mic once questions are loaded (no TTS → no “speaking ended” signal)
+  useEffect(() => {
+    if (loading || done || !micSupported || ttsEnabled) return;
+    const t = setTimeout(() => startMic(), 600);
+    return () => clearTimeout(t);
+  }, [loading, done, micSupported, ttsEnabled, startMic]);
+
+  useEffect(() => {
+    if (loading || done || !micSupported) return;
+    const id = window.setTimeout(() => {
+      if (!listeningRef.current && !speakingRef.current && !submittingRef.current) startMic();
+    }, 14000);
+    return () => clearTimeout(id);
+  }, [loading, done, micSupported, startMic]);
 
   // Load session using PUBLIC endpoint (no auth needed)
   useEffect(() => {
@@ -324,6 +346,8 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
           )}
           {/* TTS toggle */}
           <button
+            type="button"
+            title="Plays the interviewer’s questions aloud. Your microphone is the mic button below."
             onClick={() => { if (ttsEnabled) stopSpeaking(); setTtsEnabled(!ttsEnabled); }}
             className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-all ${
               ttsEnabled ? "border-violet-500 bg-violet-500/10 text-violet-400" : "border-border text-muted-foreground"
@@ -423,6 +447,19 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
         </div>
       )}
 
+      {sttError && (
+        <div className="mx-4 mt-2 flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-200">
+          <Mic className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p>{sttError}</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Tip: “Voice On” only controls the AI reading questions. Voice answers use the mic button; use Chrome or Edge on desktop for best results.
+            </p>
+          </div>
+          <button type="button" onClick={clearSttError} className="text-muted-foreground hover:text-foreground shrink-0">×</button>
+        </div>
+      )}
+
       {/* Chat */}
       <div className="flex-1 overflow-y-auto max-w-2xl w-full mx-auto px-4 py-6 space-y-4">
         {messages.map((msg) => (
@@ -464,6 +501,8 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
             <div className="flex gap-2 items-end">
               {micSupported && (
                 <button
+                  type="button"
+                  title="Speak your answer (browser speech recognition)"
                   onClick={listening ? stopMic : startMic}
                   disabled={submitting}
                   className={`flex h-[80px] w-11 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border text-xs font-medium transition-all ${

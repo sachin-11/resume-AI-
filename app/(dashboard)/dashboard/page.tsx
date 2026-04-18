@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
   BarChart3, FileText, MessageSquare, TrendingUp,
-  Upload, ArrowRight, Loader2, Trophy, Users,
+  Upload, ArrowRight, Loader2, Trophy, Users, Zap, Crown, CalendarDays,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -52,10 +52,21 @@ export default function DashboardPage() {
   const [topCandidates, setTopCandidates] = useState<TopCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [billingStatus, setBillingStatus] = useState<{ plan: string; remaining: number | null; used: number } | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [activePreset, setActivePreset] = useState("");
 
-  function load() {
+  function load(from?: string, to?: string) {
+    const f = from ?? dateFrom;
+    const t = to ?? dateTo;
     setLoading(true); setError(false);
-    fetch("/api/dashboard/stats")
+    const params = new URLSearchParams();
+    if (f) params.set("from", f);
+    if (t) params.set("to", t);
+    const qs = params.toString() ? `?${params}` : "";
+    fetch(`/api/dashboard/stats${qs}`)
       .then((r) => r.json())
       .then((d) => {
         setStats(d.stats);
@@ -67,9 +78,25 @@ export default function DashboardPage() {
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
+    fetch("/api/billing/status")
+      .then((r) => r.json())
+      .then((d) => setBillingStatus({ plan: d.plan, remaining: d.remaining, used: d.interviewsThisMonth }))
+      .catch(() => {});
   }
 
-  useEffect(() => { load(); }, []);
+  const datePickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+        setShowDatePicker(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const statCards = [
     { title: "Total Interviews", value: stats?.totalInterviews ?? 0, icon: MessageSquare, color: "text-violet-500", bg: "bg-violet-500/10" },
@@ -87,7 +114,7 @@ export default function DashboardPage() {
   if (error) return (
     <div className="flex flex-col items-center justify-center h-64 gap-2">
       <p className="text-sm text-muted-foreground">Failed to load stats</p>
-      <Button variant="outline" size="sm" onClick={load}>Retry</Button>
+      <Button variant="outline" size="sm" onClick={() => load()}>Retry</Button>
     </div>
   );
 
@@ -95,15 +122,100 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Welcome back, {session?.user?.name?.split(" ")[0] ?? "there"} 👋</h1>
           <p className="text-muted-foreground mt-1">Your interview analytics overview</p>
         </div>
-        <Button asChild>
-          <Link href="/interview/setup">Start Interview <ArrowRight className="h-4 w-4" /></Link>
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Date range filter */}
+          <div className="relative" ref={datePickerRef}>
+            <button
+              onClick={() => setShowDatePicker(!showDatePicker)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
+                activePreset ? "border-violet-500 bg-violet-500/10 text-violet-400" : "border-border text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+              {activePreset || "All time"}
+              {activePreset && (
+                <span onClick={(e) => { e.stopPropagation(); setActivePreset(""); setDateFrom(""); setDateTo(""); load("", ""); }}
+                  className="ml-1 hover:text-red-400">✕</span>
+              )}
+            </button>
+
+            {showDatePicker && (
+              <div className="absolute right-0 top-full mt-1 z-50 w-72 rounded-xl border border-border bg-card shadow-xl p-4 space-y-3">
+                {/* Presets */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-2">Quick Select</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { label: "Last 7 days", days: 7 },
+                      { label: "Last 30 days", days: 30 },
+                      { label: "Last 3 months", days: 90 },
+                      { label: "Last 6 months", days: 180 },
+                      { label: "This year", days: 365 },
+                      { label: "All time", days: 0 },
+                    ].map(({ label, days }) => (
+                      <button key={label}
+                        onClick={() => {
+                          if (days === 0) {
+                            setDateFrom(""); setDateTo(""); setActivePreset(""); load("", "");
+                          } else {
+                            const to = new Date();
+                            const from = new Date(Date.now() - days * 86400000);
+                            const fmt = (d: Date) => d.toISOString().split("T")[0];
+                            setDateFrom(fmt(from)); setDateTo(fmt(to));
+                            setActivePreset(label); load(fmt(from), fmt(to));
+                          }
+                          setShowDatePicker(false);
+                        }}
+                        className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-all text-left ${
+                          activePreset === label
+                            ? "border-violet-500 bg-violet-500/10 text-violet-400"
+                            : "border-border hover:bg-accent text-muted-foreground"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Custom range */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-2">Custom Range</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-[10px] text-muted-foreground mb-1">From</p>
+                      <input type="date" value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs outline-none focus:border-violet-500" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-muted-foreground mb-1">To</p>
+                      <input type="date" value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs outline-none focus:border-violet-500" />
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setActivePreset("Custom"); load(dateFrom, dateTo); setShowDatePicker(false); }}
+                    disabled={!dateFrom || !dateTo}
+                    className="mt-2 w-full rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-40 px-3 py-1.5 text-xs text-white font-medium transition-colors"
+                  >
+                    Apply Custom Range
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          <Button asChild>
+            <Link href="/interview/setup">Start Interview <ArrowRight className="h-4 w-4" /></Link>
+          </Button>
+        </div>
       </div>
 
       {/* ── Stat Cards ── */}
@@ -124,6 +236,31 @@ export default function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {/* ── Free Plan Usage Bar ── */}
+      {billingStatus?.plan === "free" && (
+        <div className={`flex items-center gap-4 rounded-xl border px-4 py-3 ${
+          (billingStatus.remaining ?? 0) === 0 ? "border-red-500/40 bg-red-500/10" :
+          (billingStatus.remaining ?? 0) <= 2 ? "border-yellow-500/40 bg-yellow-500/10" :
+          "border-border bg-secondary/30"
+        }`}>
+          <Zap className={`h-4 w-4 shrink-0 ${(billingStatus.remaining ?? 0) === 0 ? "text-red-400" : "text-muted-foreground"}`} />
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium">
+                {(billingStatus.remaining ?? 0) === 0 ? "Monthly limit reached" : `${billingStatus.remaining} free interview${billingStatus.remaining !== 1 ? "s" : ""} left`}
+              </span>
+              <span className="text-xs text-muted-foreground">{billingStatus.used}/5 used</span>
+            </div>
+            <Progress value={(billingStatus.used / 5) * 100} className="h-1.5" />
+          </div>
+          <Link href="/billing">
+            <button className="flex items-center gap-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors shrink-0">
+              <Crown className="h-3 w-3" /> Upgrade
+            </button>
+          </Link>
+        </div>
+      )}
 
       {!hasData ? (
         <Card>

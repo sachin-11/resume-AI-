@@ -586,7 +586,18 @@ export default function CampaignsPage() {
               </Card>
 
               {/* Candidates table */}
-              <Card>                <CardHeader><CardTitle className="text-base">Candidates ({invites.length})</CardTitle></CardHeader>
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">Candidates ({invites.length})</CardTitle>
+                    {invites.length > 0 && selected && (
+                      <a href={`/api/campaigns/${selected.id}/export`} download
+                        className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors">
+                        <Download className="h-3.5 w-3.5" /> Export CSV
+                      </a>
+                    )}
+                  </div>
+                </CardHeader>
                 <CardContent>
                   {invitesLoading ? (
                     <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>

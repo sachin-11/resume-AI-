@@ -18,39 +18,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Verify ownership
-    const interviewSession = await db.interviewSession.findFirst({
-      where: { id: sessionId, userId: session.user.id },
-    });
-    if (!interviewSession) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
+    // Verify ownership + fetch question in parallel
+    const [interviewSession, question] = await Promise.all([
+      db.interviewSession.findFirst({ where: { id: sessionId, userId: session.user.id } }),
+      db.question.findFirst({ where: { id: questionId, sessionId } }),
+    ]);
 
-    const question = await db.question.findFirst({
-      where: { id: questionId, sessionId },
-    });
-    if (!question) {
-      return NextResponse.json({ error: "Question not found" }, { status: 404 });
-    }
+    if (!interviewSession) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    if (!question) return NextResponse.json({ error: "Question not found" }, { status: 404 });
 
-    // Save answer
-    await db.answer.create({
-      data: { questionId, text: answerText },
-    });
-
-    // Generate follow-up question
-    let followupText: string | null = null;
-    if (process.env.GROQ_API_KEY) {
-      try {
-        followupText = await callGroq(
-          FOLLOWUP_SYSTEM,
-          followupPrompt(question.text, answerText)
-        );
-        followupText = followupText.trim();
-      } catch {
-        // Follow-up is optional, don't fail
-      }
-    }
+    // Save answer + generate followup in parallel
+    const [, followupText] = await Promise.all([
+      db.answer.create({ data: { questionId, text: answerText } }),
+      process.env.GROQ_API_KEY
+        ? callGroq(FOLLOWUP_SYSTEM, followupPrompt(question.text, answerText))
+            .then((t) => t.trim())
+            .catch(() => null)
+        : Promise.resolve(null),
+    ]);
 
     // Save follow-up as a new question if generated
     let followupQuestion = null;

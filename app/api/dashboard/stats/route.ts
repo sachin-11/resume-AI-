@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
@@ -11,13 +11,21 @@ export async function GET() {
     }
 
     const userId = session.user.id;
+    const { searchParams } = req.nextUrl;
+
+    // Date range filter
+    const from = searchParams.get("from");
+    const to = searchParams.get("to");
+    const dateFilter = from && to ? {
+      createdAt: { gte: new Date(from), lte: new Date(to + "T23:59:59.999Z") }
+    } : {};
 
     const [totalInterviews, totalResumes, feedbackReports, lastSession, campaigns] =
       await Promise.all([
-        db.interviewSession.count({ where: { userId } }),
+        db.interviewSession.count({ where: { userId, ...dateFilter } }),
         db.resume.count({ where: { userId } }),
         db.feedbackReport.findMany({
-          where: { session: { userId } },
+          where: { session: { userId, ...dateFilter } },
           select: {
             overallScore: true, technicalScore: true,
             communicationScore: true, confidenceScore: true,
@@ -84,35 +92,36 @@ export async function GET() {
       count: scores.length,
     }));
 
-    // ── Pass/fail rate per campaign ──────────────────────────
+    // ── Pass/fail rate per campaign — single query, no N+1 ──
     const PASS_THRESHOLD = 60;
-    const campaignStats = await Promise.all(
-      campaigns.map(async (c) => {
-        const sessionIds = c.invites.map((i) => i.sessionId).filter(Boolean) as string[];
-        if (sessionIds.length === 0) return null;
-
-        const reports = await db.feedbackReport.findMany({
-          where: { sessionId: { in: sessionIds } },
-          select: { overallScore: true },
-        });
-
-        const pass = reports.filter((r) => r.overallScore >= PASS_THRESHOLD).length;
-        const fail = reports.length - pass;
-        const avg = reports.length > 0
-          ? Math.round(reports.reduce((s, r) => s + r.overallScore, 0) / reports.length)
-          : 0;
-
-        return {
-          name: c.title.length > 18 ? c.title.slice(0, 16) + "…" : c.title,
-          role: c.role,
-          pass,
-          fail,
-          avg,
-          total: reports.length,
-        };
-      })
+    const campaignSessionIds = campaigns.flatMap((c) =>
+      c.invites.map((i) => i.sessionId).filter(Boolean) as string[]
     );
-    const filteredCampaignStats = campaignStats.filter(Boolean);
+
+    const allCampaignReports = campaignSessionIds.length > 0
+      ? await db.feedbackReport.findMany({
+          where: { sessionId: { in: campaignSessionIds } },
+          select: { sessionId: true, overallScore: true },
+        })
+      : [];
+
+    const reportBySession = new Map(allCampaignReports.map((r) => [r.sessionId, r.overallScore]));
+
+    const campaignStats = campaigns.map((c) => {
+      const sessionIds = c.invites.map((i) => i.sessionId).filter(Boolean) as string[];
+      const scores = sessionIds.map((id) => reportBySession.get(id)).filter((s): s is number => s !== undefined);
+      if (scores.length === 0) return null;
+
+      const pass = scores.filter((s) => s >= PASS_THRESHOLD).length;
+      return {
+        name: c.title.length > 18 ? c.title.slice(0, 16) + "…" : c.title,
+        role: c.role,
+        pass,
+        fail: scores.length - pass,
+        avg: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length),
+        total: scores.length,
+      };
+    }).filter(Boolean);
 
     // ── Best performing candidates ───────────────────────────
     const topCandidates = await db.feedbackReport.findMany({
@@ -131,7 +140,7 @@ export async function GET() {
       trends,
       byRole,
       byDifficulty,
-      campaignStats: filteredCampaignStats,
+      campaignStats: campaignStats,
       topCandidates: topCandidates.map((r) => ({
         title: r.session?.title ?? "Interview",
         role: r.session?.role ?? "",

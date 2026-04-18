@@ -22,11 +22,13 @@ export const authOptions: NextAuthOptions = {
     error: "/login",
   },
   providers: [
-    // ── Google OAuth ─────────────────────────────────────────
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    }),
+    // ── Google OAuth (only if credentials are configured) ────
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      ? [GoogleProvider({
+          clientId: process.env.GOOGLE_CLIENT_ID,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        })]
+      : []),
 
     // ── Email + Password ─────────────────────────────────────
     CredentialsProvider({

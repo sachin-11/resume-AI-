@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { extractTextFromFile } from "@/lib/fileParser";
+import { indexResume } from "@/lib/rag";
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    const maxSize = 5 * 1024 * 1024; // 5MB
+    const maxSize = 5 * 1024 * 1024;
     if (file.size > maxSize) {
       return NextResponse.json({ error: "File too large (max 5MB)" }, { status: 400 });
     }
@@ -43,6 +44,11 @@ export async function POST(req: NextRequest) {
         rawText,
       },
     });
+
+    // Index resume in Pinecone for RAG (non-blocking)
+    indexResume(resume.id, session.user.id, rawText).catch((e) =>
+      console.error("[RAG_INDEX]", e)
+    );
 
     return NextResponse.json({ resume }, { status: 201 });
   } catch (err) {

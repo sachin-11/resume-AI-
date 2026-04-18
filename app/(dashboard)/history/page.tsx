@@ -24,17 +24,28 @@ interface Session {
 export default function HistoryPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterDifficulty, setFilterDifficulty] = useState("all");
   const [filterRound, setFilterRound] = useState("all");
 
-  useEffect(() => {
-    fetch("/api/interview/list")
+  function loadSessions(p = 1) {
+    setLoading(true);
+    fetch(`/api/interview/list?page=${p}`)
       .then((r) => r.json())
-      .then((d) => setSessions(d.sessions ?? []))
+      .then((d) => {
+        setSessions(d.sessions ?? []);
+        setTotalPages(d.pages ?? 1);
+        setTotal(d.total ?? 0);
+        setPage(p);
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { loadSessions(1); }, []);
 
   const filtered = useMemo(() => {
     return sessions.filter((s) => {
@@ -68,7 +79,7 @@ export default function HistoryPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Interview History</h1>
-          <p className="text-muted-foreground mt-1">{sessions.length} sessions total</p>
+          <p className="text-muted-foreground mt-1">{total} sessions total</p>
         </div>
         <Button asChild>
           <Link href="/interview/setup">New Interview</Link>
@@ -192,6 +203,18 @@ export default function HistoryPage() {
             <p className="text-center text-xs text-muted-foreground pt-1">
               Showing {filtered.length} of {sessions.length} sessions
             </p>
+          )}
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => loadSessions(page - 1)} disabled={page <= 1 || loading}>
+                ← Prev
+              </Button>
+              <span className="text-xs text-muted-foreground">Page {page} of {totalPages}</span>
+              <Button variant="outline" size="sm" onClick={() => loadSessions(page + 1)} disabled={page >= totalPages || loading}>
+                Next →
+              </Button>
+            </div>
           )}
         </div>
       )}

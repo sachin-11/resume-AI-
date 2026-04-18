@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   Send, Loader2, Bot, User, Flag, CheckCircle,
   Volume2, VolumeX, Mic, MicOff, AudioLines, StopCircle, UserRound,
-  Camera, CameraOff, VideoOff,
+  Camera, CameraOff, VideoOff, SkipForward,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,6 +46,9 @@ export default function InterviewSessionPage() {
   const [confirmEnd, setConfirmEnd] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const doneRef = useRef(false);
+  const listeningRef = useRef(false);
+  const speakingRef = useRef(false);
+  const submittingRef = useRef(false);
 
   // Warn user before navigating away mid-interview
   useEffect(() => {
@@ -74,7 +77,9 @@ export default function InterviewSessionPage() {
     const last = messages[messages.length - 1];
     if (last?.role === "assistant" && last.id !== lastSpokenId.current && last.id !== "feedback-error") {
       lastSpokenId.current = last.id;
-      speak(last.content);
+      // Delay ensures voices are loaded and browser allows speech
+      const t = setTimeout(() => speak(last.content), 300);
+      return () => clearTimeout(t);
     }
   }, [messages, ttsEnabled, speak]);
 
@@ -86,12 +91,22 @@ export default function InterviewSessionPage() {
     submitRef.current?.(text);
   }, []);
 
-  const { start: startMic, stop: stopMic, listening, supported: micSupported, countdown, canSubmit, cancelAutoSubmit } = useSTT({
+  const sttLang =
+    session?.language && session.language.includes("-")
+      ? session.language
+      : `${session?.language ?? "en"}-US`;
+
+  const { start: startMic, stop: stopMic, listening, supported: micSupported, countdown, canSubmit, cancelAutoSubmit, sttError, clearSttError } = useSTT({
     onInterim: handleInterim,
     onAutoSubmit: handleAutoSubmit,
     silenceMs: 4000,   // 4 seconds — enough time for natural pauses
     minWords: 4,       // must say at least 4 words before auto-submit kicks in
+    lang: sttLang,
   });
+
+  listeningRef.current = listening;
+  speakingRef.current = speaking;
+  submittingRef.current = submitting;
 
   // ── Core submit logic ────────────────────────────────────────
   const doSubmit = useCallback(async (text: string) => {
@@ -224,8 +239,61 @@ export default function InterviewSessionPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // Auto-start mic when session loads (if TTS is on, wait for first speak; if off, start immediately)
+  useEffect(() => {
+    if (!loading && !done && micSupported && !warmup) {
+      const t = setTimeout(() => { if (!listening) startMic(); }, 800);
+      return () => clearTimeout(t);
+    }
+  }, [loading, done, micSupported, warmup]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Warmup + AI voice off: start mic without waiting for TTS (none is playing)
+  useEffect(() => {
+    if (loading || done || !micSupported || !warmup || ttsEnabled) return;
+    const t = setTimeout(() => startMic(), 600);
+    return () => clearTimeout(t);
+  }, [loading, done, micSupported, warmup, ttsEnabled, startMic]);
+
+  // Safety net: if TTS never drives "speaking" (browser blocked, etc.), still open the mic
+  useEffect(() => {
+    if (loading || done || !micSupported) return;
+    const id = window.setTimeout(() => {
+      if (!listeningRef.current && !speakingRef.current && !submittingRef.current) startMic();
+    }, 14000);
+    return () => clearTimeout(id);
+  }, [loading, done, micSupported, startMic]);
+
   // Keep ref in sync
   useEffect(() => { submitRef.current = doSubmit; }, [doSubmit]);
+
+  // ── Skip question ────────────────────────────────────────────
+  const handleSkip = useCallback(async () => {
+    if (!session || warmup || done || submitting) return;
+    stopMic(); stopSpeaking();
+    setSubmitting(true);
+    const currentQ = session.questions[currentIndex];
+    // Save a placeholder answer so feedback knows it was skipped
+    await fetch("/api/interview/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ questionId: currentQ.id, answerText: "[Skipped]", sessionId: id }),
+    });
+    const next = currentIndex + 1;
+    if (next < session.questions.length) {
+      setMessages((p) => [...p,
+        { id: `skip-${currentQ.id}`, role: "user", content: "⏭ Skipped" },
+        { id: `q-${session.questions[next].id}`, role: "assistant", content: session.questions[next].text, source: session.questions[next].source },
+      ]);
+      setCurrentIndex(next);
+    } else {
+      setMessages((p) => [...p,
+        { id: `skip-${currentQ.id}`, role: "user", content: "⏭ Skipped" },
+        { id: "complete", role: "assistant", content: "Great job! You've answered all the questions. Click 'Get Scorecard' to see your detailed performance report." },
+      ]);
+      setDone(true);
+    }
+    setSubmitting(false);
+  }, [session, currentIndex, id, warmup, done, submitting, stopMic, stopSpeaking]);
 
   // ── End interview ────────────────────────────────────────────
   async function handleEndInterview() {
@@ -280,6 +348,8 @@ export default function InterviewSessionPage() {
           <div className="flex items-center gap-2 shrink-0">
             {/* TTS toggle */}
             <button
+              type="button"
+              title="Plays the interviewer’s questions aloud. Your microphone is the mic button below."
               onClick={() => { if (ttsEnabled) stopSpeaking(); setTtsEnabled(!ttsEnabled); }}
               className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-all ${
                 ttsEnabled ? "border-violet-500 bg-violet-500/10 text-violet-400" : "border-border text-muted-foreground hover:bg-accent"
@@ -386,6 +456,19 @@ export default function InterviewSessionPage() {
         </div>
       )}
 
+      {sttError && (
+        <div className="mx-0 mb-2 flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-200">
+          <Mic className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p>{sttError}</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Tip: “Voice On” only controls the AI reading questions. Voice answers use the mic button and need Chrome or Edge on desktop for best results.
+            </p>
+          </div>
+          <button type="button" onClick={clearSttError} className="text-muted-foreground hover:text-foreground shrink-0">×</button>
+        </div>
+      )}
+
       {/* ── Chat ── */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin">
         {messages.map((msg) => (
@@ -442,6 +525,8 @@ export default function InterviewSessionPage() {
               {micSupported && (
                 <div className="relative flex flex-col items-center">
                   <button
+                    type="button"
+                    title="Speak your answer (browser speech recognition)"
                     onClick={listening ? stopMic : startMic}
                     disabled={submitting}
                     className={`relative flex h-[90px] w-11 flex-col items-center justify-center gap-1 rounded-xl border text-xs font-medium transition-all ${
@@ -514,31 +599,36 @@ export default function InterviewSessionPage() {
               <p className="text-xs text-muted-foreground">
                 <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Enter</kbd> to submit · <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Shift+Enter</kbd> for newline
               </p>
-              {listening && (
-                <div className="flex items-center gap-2">
-                  {canSubmit && countdown > 0 ? (
-                    // Countdown active — show cancel button
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs text-orange-400 flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block animate-pulse" />
-                        Sending in {countdown}s…
+              <div className="flex items-center gap-2">
+                {/* Skip button */}
+                {!warmup && (
+                  <button onClick={handleSkip} disabled={submitting}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-yellow-400 transition-colors border border-border hover:border-yellow-400/50 rounded-lg px-2 py-1">
+                    <SkipForward className="h-3 w-3" /> Skip
+                  </button>
+                )}
+                {listening && (
+                  <div className="flex items-center gap-2">
+                    {canSubmit && countdown > 0 ? (
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-orange-400 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block animate-pulse" />
+                          Sending in {countdown}s…
+                        </p>
+                        <button onClick={cancelAutoSubmit}
+                          className="text-xs px-2 py-0.5 rounded-md border border-orange-400/50 text-orange-400 hover:bg-orange-400/10 transition-all font-medium">
+                          Wait, I&apos;m not done
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-red-400 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block animate-pulse" />
+                        {!canSubmit ? "Keep speaking… (need a few more words)" : "Recording…"}
                       </p>
-                      <button
-                        onClick={cancelAutoSubmit}
-                        className="text-xs px-2 py-0.5 rounded-md border border-orange-400/50 text-orange-400 hover:bg-orange-400/10 transition-all font-medium"
-                      >
-                        Wait, I&apos;m not done
-                      </button>
-                    </div>
-                  ) : (
-                    // Still speaking or not enough words yet
-                    <p className="text-xs text-red-400 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block animate-pulse" />
-                      {!canSubmit ? "Keep speaking… (need a few more words)" : "Recording…"}
-                    </p>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </>
         ) : (

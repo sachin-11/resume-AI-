@@ -35,12 +35,17 @@ export function useTTS(initialGender: VoiceGender = "male", lang = "en") {
   const [speaking, setSpeaking] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [voiceGender, setVoiceGender] = useState<VoiceGender>(initialGender);
+  const [voicesReady, setVoicesReady] = useState(false);
 
-  // Voices load asynchronously in some browsers
+  // Voices load asynchronously — wait for them
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.speechSynthesis.getVoices(); // trigger load
-    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) { setVoicesReady(true); return; }
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.getVoices();
+      setVoicesReady(true);
+    };
   }, []);
 
   const speak = useCallback(
@@ -54,10 +59,10 @@ export function useTTS(initialGender: VoiceGender = "male", lang = "en") {
       const voice = pickVoice(voiceGender, lang);
       if (voice) {
         utterance.voice = voice;
-        utterance.lang = voice.lang; // set utterance lang to match voice
+        utterance.lang = voice.lang;
         utterance.pitch = voiceGender === "female" ? 1.2 : 0.85;
       } else {
-        utterance.lang = lang.includes("-") ? lang : `${lang}-IN`;
+        utterance.lang = lang.includes("-") ? lang : "en-US";
         utterance.pitch = voiceGender === "female" ? 1.2 : 0.85;
       }
 
@@ -66,7 +71,7 @@ export function useTTS(initialGender: VoiceGender = "male", lang = "en") {
       utterance.onerror = () => setSpeaking(false);
       window.speechSynthesis.speak(utterance);
     },
-    [enabled, voiceGender]
+    [enabled, voiceGender, lang, voicesReady] // added lang + voicesReady
   );
 
   const stop = useCallback(() => {
@@ -89,7 +94,7 @@ interface SpeechRecognitionInstance {
   interimResults: boolean;
   lang: string;
   onstart: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((ev: Event) => void) | null;
   onend: (() => void) | null;
   onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
   start: () => void;
@@ -121,6 +126,41 @@ interface STTOptions {
   lang?: string;        // BCP-47 language code e.g. "hi-IN", "es-ES"
 }
 
+/** User-visible hint when recognition fails (e.g. mic blocked). */
+function sttErrorMessage(code: string): string {
+  switch (code) {
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone access was blocked. Allow the mic for this site in your browser address bar, then click the mic button again.";
+    case "audio-capture":
+      return "No microphone was found or it is in use by another app.";
+    case "network":
+      return "Speech recognition needs a network connection. Check your internet and try again.";
+    case "language-not-supported":
+      return "This browser does not support speech recognition for the selected language.";
+    case "no-speech":
+      return "No speech detected. Speak closer to the mic or try again.";
+    default:
+      return "Voice input stopped unexpectedly. Click the mic to try again.";
+  }
+}
+
+/** getUserMedia throws DOMException — map to advice; `null` means we can still try Web Speech API. */
+function getUserMediaHardStop(err: unknown): string | null {
+  if (!(err instanceof DOMException)) return null;
+  switch (err.name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      return sttErrorMessage("not-allowed");
+    case "SecurityError":
+      return "This page is not treated as secure, so the microphone cannot open. Use https:// in production; for local testing use http://localhost (avoid LAN IP URLs if the browser blocks the mic).";
+    case "NotFoundError":
+      return sttErrorMessage("audio-capture");
+    default:
+      return null;
+  }
+}
+
 export function useSTT({
   onInterim,
   onAutoSubmit,
@@ -132,6 +172,7 @@ export function useSTT({
   const [supported, setSupported] = useState(false);
   const [countdown, setCountdown] = useState(0);   // seconds remaining
   const [canSubmit, setCanSubmit] = useState(false); // enough words spoken?
+  const [sttError, setSttError] = useState<string | null>(null);
 
   const recRef = useRef<SpeechRecognitionInstance | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -187,9 +228,36 @@ export function useSTT({
     }, silenceMs);
   }, [silenceMs, minWords, clearTimers]);
 
-  const start = useCallback(() => {
+  const clearSttError = useCallback(() => setSttError(null), []);
+
+  const start = useCallback(async () => {
     const SR = getSpeechRecognitionCtor();
     if (!SR) return;
+
+    setSttError(null);
+    recRef.current?.stop();
+    recRef.current = null;
+
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      const msg = getUserMediaHardStop(new DOMException("Insecure context", "SecurityError"));
+      if (msg) setSttError(msg);
+      return;
+    }
+
+    // Best-effort mic prime (clearer errors + permission prompt). Do not treat every failure as “blocked”.
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+      } catch (e) {
+        const hard = getUserMediaHardStop(e);
+        if (hard) {
+          setSttError(hard);
+          return;
+        }
+        // NotReadableError, AbortError, etc. — still try speech recognition (often works; toggles can lie).
+      }
+    }
 
     accumulatedRef.current = "";
     setCanSubmit(false);
@@ -200,7 +268,16 @@ export function useSTT({
     rec.lang = lang;
 
     rec.onstart = () => setListening(true);
-    rec.onerror = () => { clearTimers(); setListening(false); };
+    rec.onerror = (ev: Event) => {
+      clearTimers();
+      setListening(false);
+      const err = "error" in ev && typeof (ev as { error?: string }).error === "string"
+        ? (ev as { error: string }).error
+        : "unknown";
+      if (err !== "aborted" && err !== "no-speech") {
+        setSttError(sttErrorMessage(err));
+      }
+    };
     rec.onend = () => { clearTimers(); setListening(false); };
 
     rec.onresult = (e: SpeechRecognitionResultEvent) => {
@@ -221,8 +298,13 @@ export function useSTT({
     };
 
     recRef.current = rec;
-    rec.start();
-  }, [onInterim, startSilenceTimer, clearTimers]);
+    try {
+      rec.start();
+    } catch {
+      setSttError(sttErrorMessage("unknown"));
+      setListening(false);
+    }
+  }, [lang, onInterim, startSilenceTimer, clearTimers]);
 
   const stop = useCallback(() => {
     clearTimers();
@@ -233,5 +315,5 @@ export function useSTT({
 
   useEffect(() => () => { recRef.current?.stop(); clearTimers(); }, [clearTimers]);
 
-  return { start, stop, listening, supported, countdown, canSubmit, cancelAutoSubmit };
+  return { start, stop, listening, supported, countdown, canSubmit, cancelAutoSubmit, sttError, clearSttError };
 }

@@ -10,6 +10,7 @@ import { interviewSetupSchema } from "@/lib/validations";
 import { MOCK_QUESTIONS } from "@/lib/mockData";
 import { getPersona } from "@/lib/personas";
 import { canCreateInterview } from "@/lib/stripe";
+import { buildRAGContext } from "@/lib/rag";
 
 export async function POST(req: NextRequest) {
   try {
@@ -76,9 +77,22 @@ export async function POST(req: NextRequest) {
         const base = MOCK_QUESTIONS[roundType] ?? MOCK_QUESTIONS.technical;
         aiQuestions = base.slice(0, aiCount).map((q, i) => ({ ...q, orderIndex: i + 1 }));
       } else {
+        // ── RAG: retrieve relevant resume chunks for better context ──
+        const ragContext = resumeId
+          ? await buildRAGContext(session.user.id, role, roundType)
+          : "";
+
         const raw = await callGroq(
           QUESTION_GENERATION_SYSTEM,
-          questionGenerationPrompt({ resumeText, role, difficulty, roundType, count: aiCount, personaPrompt: persona.systemPrompt })
+          questionGenerationPrompt({
+            resumeText,
+            role,
+            difficulty,
+            roundType,
+            count: aiCount,
+            personaPrompt: persona.systemPrompt,
+            ragContext, // inject RAG context
+          })
         );
         const parsed_q = safeJsonParse<GeneratedQuestion[]>(raw, MOCK_QUESTIONS.technical);
         aiQuestions = parsed_q.slice(0, aiCount).map((q, i) => ({ ...q, orderIndex: i + 1 }));

@@ -105,42 +105,47 @@ export async function GET(
     orderBy: { createdAt: "desc" },
   });
 
-  // Fetch scores + tabSwitchCount for completed invites
-  const invitesWithScores = await Promise.all(
-    invites.map(async (inv) => {
-      if (inv.sessionId) {
-        const sessionData = await db.interviewSession.findUnique({
-          where: { id: inv.sessionId },
+  // Batch fetch all session data + feedback in 2 queries instead of N*2
+  const sessionIds = invites.map((i) => i.sessionId).filter(Boolean) as string[];
+
+  const [sessionDataMap, feedbackMap] = await Promise.all([
+    sessionIds.length > 0
+      ? db.interviewSession.findMany({
+          where: { id: { in: sessionIds } },
           select: {
-            tabSwitchCount: true, audioKey: true,
+            id: true, tabSwitchCount: true, audioKey: true,
             multipleFacesCount: true, noFaceCount: true,
             lookingAwayCount: true, noiseCount: true, copyPasteCount: true,
             integrityFlag: true,
           },
-        });
-        const feedback = await db.feedbackReport.findUnique({
-          where: { sessionId: inv.sessionId },
-          select: { overallScore: true },
-        });
-        return {
-          ...inv,
-          score: feedback?.overallScore ?? null,
-          tabSwitchCount: sessionData?.tabSwitchCount ?? 0,
-          hasAudio: !!sessionData?.audioKey,
-          sessionId: inv.sessionId,
-          integrityFlag: sessionData?.integrityFlag ?? "clean",
-          proctoring: {
-            multipleFaces: sessionData?.multipleFacesCount ?? 0,
-            noFace: sessionData?.noFaceCount ?? 0,
-            lookingAway: sessionData?.lookingAwayCount ?? 0,
-            noise: sessionData?.noiseCount ?? 0,
-            copyPaste: sessionData?.copyPasteCount ?? 0,
-          },
-        };
-      }
-      return { ...inv, score: null, tabSwitchCount: 0, hasAudio: false };
-    })
-  );
+        }).then((rows) => new Map(rows.map((r) => [r.id, r])))
+      : Promise.resolve(new Map()),
+    sessionIds.length > 0
+      ? db.feedbackReport.findMany({
+          where: { sessionId: { in: sessionIds } },
+          select: { sessionId: true, overallScore: true },
+        }).then((rows) => new Map(rows.map((r) => [r.sessionId, r.overallScore])))
+      : Promise.resolve(new Map()),
+  ]);
+
+  const invitesWithScores = invites.map((inv) => {
+    const sd = inv.sessionId ? sessionDataMap.get(inv.sessionId) : null;
+    const score = inv.sessionId ? (feedbackMap.get(inv.sessionId) ?? null) : null;
+    return {
+      ...inv,
+      score,
+      tabSwitchCount: sd?.tabSwitchCount ?? 0,
+      hasAudio: !!sd?.audioKey,
+      integrityFlag: sd?.integrityFlag ?? "clean",
+      proctoring: sd ? {
+        multipleFaces: sd.multipleFacesCount,
+        noFace: sd.noFaceCount,
+        lookingAway: sd.lookingAwayCount,
+        noise: sd.noiseCount,
+        copyPaste: sd.copyPasteCount,
+      } : null,
+    };
+  });
 
   return NextResponse.json({ invites: invitesWithScores });
 }

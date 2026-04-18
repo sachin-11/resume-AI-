@@ -85,9 +85,8 @@ model InterviewSession {
   audioKey            String?
   language            String     @default("en")
   persona             String     @default("friendly")
-  transcript          String?    // Whisper auto-transcription
-  integrityFlag       String     @default("clean")  // clean | warning | suspicious
-  // Proctoring stats
+  transcript          String?
+  integrityFlag       String     @default("clean")
   multipleFacesCount  Int        @default(0)
   noFaceCount         Int        @default(0)
   lookingAwayCount    Int        @default(0)
@@ -99,6 +98,10 @@ model InterviewSession {
   resume              Resume?    @relation(fields: [resumeId], references: [id])
   questions           Question[]
   feedbackReport      FeedbackReport?
+
+  @@index([userId])
+  @@index([userId, status])
+  @@index([userId, createdAt])
 }
 
 model Question {
@@ -185,6 +188,8 @@ model FeedbackReport {
   summary             String
   createdAt           DateTime         @default(now())
   session             InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
 }
 
 // ── Bulk Interview Campaign ──────────────────────────────────────
