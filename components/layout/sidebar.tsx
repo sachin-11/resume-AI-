@@ -6,11 +6,12 @@ import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, FileText, Upload, MessageSquare,
   BarChart3, Settings, LogOut, Brain, ChevronRight,
-  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Menu, X,
+  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Menu, X, Sun, Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { can } from "@/lib/permissions";
+import { useTheme } from "@/components/providers/theme-provider";
 
 const NAV_ITEMS = [
   { href: "/dashboard",         label: "Dashboard",         icon: LayoutDashboard },
@@ -42,6 +43,7 @@ function NavContent({
   role: "admin" | "recruiter" | "viewer";
   onClose?: () => void;
 }) {
+  const { theme, toggle } = useTheme();
   const items = NAV_ITEMS.filter((item) => {
     if ("adminOnly" in item && item.adminOnly) return role === "admin";
     if ("perm" in item && item.perm) {
@@ -89,7 +91,7 @@ function NavContent({
         })}
       </nav>
 
-      {/* User */}
+      {/* User + Theme toggle */}
       <div className="border-t border-border p-3">
         <div className="flex items-center gap-3 px-3 py-2 mb-1">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-600/20">
@@ -101,10 +103,18 @@ function NavContent({
               {role}
             </span>
           </div>
+          {/* Theme toggle */}
+          <button
+            onClick={toggle}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-accent hover:text-foreground transition-colors shrink-0"
+          >
+            {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+          </button>
         </div>
         <Button variant="ghost" size="sm"
           className="w-full justify-start text-muted-foreground hover:text-red-400"
-          onClick={() => signOut({ callbackUrl: "/login" })}>
+          onClick={() => signOut({ callbackUrl: "/" })}>
           <LogOut className="h-4 w-4 mr-2" /> Sign out
         </Button>
       </div>

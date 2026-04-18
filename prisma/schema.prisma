@@ -228,6 +228,19 @@ model CandidateInvite {
   createdAt      DateTime           @default(now())
   campaign       InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   slot           InterviewSlot?     @relation(fields: [slotId], references: [id])
+  notes          CandidateNote[]
+}
+
+// ── Recruiter Notes ──────────────────────────────────────────────
+model CandidateNote {
+  id        String          @id @default(cuid())
+  inviteId  String
+  userId    String
+  text      String
+  createdAt DateTime        @default(now())
+  invite    CandidateInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+
+  @@index([inviteId])
 }
 
 // ── Interview Scheduling ─────────────────────────────────────────

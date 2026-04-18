@@ -32,6 +32,7 @@ export default function InterviewSetupPage() {
   const [loading, setLoading] = useState(false);
   const [limitError, setLimitError] = useState("");
   const [billing, setBilling] = useState<{ plan: string; remaining: number | null; used: number } | null>(null);
+  const [difficultySuggestion, setDifficultySuggestion] = useState<{ difficulty: string; reason: string } | null>(null);
   const [form, setForm] = useState({
     resumeId: "", role: "", difficulty: "intermediate",
     roundType: "technical", questionCount: 5,
@@ -45,6 +46,19 @@ export default function InterviewSetupPage() {
       setBilling({ plan: d.plan, remaining: d.remaining, used: d.interviewsThisMonth });
     });
   }, []);
+
+  // Auto-suggest difficulty when resume changes
+  useEffect(() => {
+    if (!form.resumeId || form.resumeId === "none") { setDifficultySuggestion(null); return; }
+    fetch(`/api/resume/suggest-difficulty?resumeId=${form.resumeId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.difficulty) {
+          setDifficultySuggestion(d);
+          setForm((f) => ({ ...f, difficulty: d.difficulty }));
+        }
+      });
+  }, [form.resumeId]);
 
   function toggleQuestion(id: string) {
     setSelectedCustomIds((p) =>
@@ -230,6 +244,12 @@ export default function InterviewSetupPage() {
                   }`}>{d}</button>
               ))}
             </div>
+            {difficultySuggestion && (
+              <p className="text-xs text-violet-400 flex items-center gap-1.5">
+                <Zap className="h-3 w-3" />
+                Auto-suggested: <strong>{difficultySuggestion.difficulty}</strong> — {difficultySuggestion.reason}
+              </p>
+            )}
           </div>
 
           {/* Question Count */}

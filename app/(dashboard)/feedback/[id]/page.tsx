@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Loader2, TrendingUp, MessageSquare, Brain, Zap,
   CheckCircle, AlertCircle, ArrowRight, Trophy,
-  XCircle, MinusCircle,
+  XCircle, MinusCircle, Download, FileText,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -136,6 +136,225 @@ export default function FeedbackPage() {
     { subject: "Overall", score: feedback.overallScore },
   ];
 
+  function downloadText() {
+    const lines: string[] = [];
+    lines.push(`INTERVIEW FEEDBACK REPORT`);
+    lines.push(`${"=".repeat(50)}`);
+    lines.push(`Session: ${feedback.session.title}`);
+    lines.push(`Role: ${feedback.session.role}`);
+    lines.push(`Round: ${feedback.session.roundType.replace("_", " ")} | Difficulty: ${feedback.session.difficulty}`);
+    lines.push(`Date: ${formatDate(feedback.session.createdAt)}`);
+    lines.push(``);
+    lines.push(`SCORES`);
+    lines.push(`${"─".repeat(30)}`);
+    lines.push(`Overall:       ${feedback.overallScore}/100`);
+    lines.push(`Technical:     ${feedback.technicalScore}/100`);
+    lines.push(`Communication: ${feedback.communicationScore}/100`);
+    lines.push(`Confidence:    ${feedback.confidenceScore}/100`);
+    lines.push(``);
+    lines.push(`SUMMARY`);
+    lines.push(`${"─".repeat(30)}`);
+    lines.push(feedback.summary);
+    lines.push(``);
+    lines.push(`STRENGTHS`);
+    lines.push(`${"─".repeat(30)}`);
+    feedback.strengths.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+    lines.push(``);
+    lines.push(`AREAS TO IMPROVE`);
+    lines.push(`${"─".repeat(30)}`);
+    feedback.weakAreas.forEach((w, i) => lines.push(`${i + 1}. ${w}`));
+    lines.push(``);
+
+    const answeredQs = feedback.session.questions?.filter((q) => q.answers?.[0]?.text) ?? [];
+    if (answeredQs.length > 0) {
+      lines.push(`YOUR RESPONSES`);
+      lines.push(`${"─".repeat(30)}`);
+      answeredQs.forEach((q, i) => {
+        lines.push(`Q${i + 1}: ${q.text}`);
+        lines.push(`A: ${q.answers[0].text}`);
+        lines.push(``);
+      });
+    }
+
+    if (feedback.betterAnswers?.length > 0) {
+      lines.push(`IMPROVED ANSWER EXAMPLES`);
+      lines.push(`${"─".repeat(30)}`);
+      feedback.betterAnswers.forEach((ba, i) => {
+        lines.push(`Q${i + 1}: ${ba.question}`);
+        if (ba.candidateAnswer) lines.push(`Your Answer: ${ba.candidateAnswer}`);
+        lines.push(`Better Answer: ${ba.improvedAnswer}`);
+        lines.push(``);
+      });
+    }
+
+    lines.push(`IMPROVEMENT ROADMAP`);
+    lines.push(`${"─".repeat(30)}`);
+    feedback.improvementRoadmap.forEach((step, i) => lines.push(`${i + 1}. ${step}`));
+
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `interview-feedback-${feedback.session.role.replace(/\s+/g, "-")}-${new Date().toISOString().split("T")[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadJSON() {
+    const data = {
+      session: feedback.session,
+      scores: {
+        overall: feedback.overallScore,
+        technical: feedback.technicalScore,
+        communication: feedback.communicationScore,
+        confidence: feedback.confidenceScore,
+      },
+      summary: feedback.summary,
+      strengths: feedback.strengths,
+      weakAreas: feedback.weakAreas,
+      improvementRoadmap: feedback.improvementRoadmap,
+      betterAnswers: feedback.betterAnswers,
+      responses: feedback.session.questions
+        ?.filter((q) => q.answers?.[0]?.text)
+        .map((q) => ({ question: q.text, answer: q.answers[0].text })),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `interview-feedback-${feedback.session.role.replace(/\s+/g, "-")}-${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function downloadPDF() {
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const VIOLET: [number, number, number] = [124, 58, 237];
+    const DARK:   [number, number, number] = [17, 17, 24];
+    const GRAY:   [number, number, number] = [100, 116, 139];
+    const WHITE:  [number, number, number] = [255, 255, 255];
+    const GREEN:  [number, number, number] = [34, 197, 94];
+    const YELLOW: [number, number, number] = [234, 179, 8];
+    const RED:    [number, number, number] = [239, 68, 68];
+
+    const scoreColor: [number, number, number] =
+      feedback.overallScore >= 70 ? GREEN : feedback.overallScore >= 55 ? YELLOW : RED;
+    const grade = feedback.overallScore >= 85 ? "Excellent" :
+      feedback.overallScore >= 70 ? "Pass" :
+      feedback.overallScore >= 55 ? "Decent" : "Needs Work";
+
+    // ── Header ──
+    doc.setFillColor(...VIOLET);
+    doc.rect(0, 0, 210, 38, "F");
+    doc.setTextColor(...WHITE);
+    doc.setFontSize(20); doc.setFont("helvetica", "bold");
+    doc.text("Interview Feedback Report", 15, 16);
+    doc.setFontSize(10); doc.setFont("helvetica", "normal");
+    doc.text(`${feedback.session.title}`, 15, 24);
+    doc.text(`${feedback.session.roundType.replace("_", " ")} · ${feedback.session.difficulty} · ${formatDate(feedback.session.createdAt)}`, 15, 31);
+
+    // ── Score summary ──
+    doc.setTextColor(...DARK);
+    doc.setFontSize(13); doc.setFont("helvetica", "bold");
+    doc.text("Score Summary", 15, 50);
+
+    autoTable(doc, {
+      startY: 54,
+      head: [["Metric", "Score", "Grade"]],
+      body: [
+        ["Overall",       `${feedback.overallScore}/100`, grade],
+        ["Technical",     `${feedback.technicalScore}/100`, ""],
+        ["Communication", `${feedback.communicationScore}/100`, ""],
+        ["Confidence",    `${feedback.confidenceScore}/100`, ""],
+      ],
+      theme: "striped",
+      headStyles: { fillColor: VIOLET, textColor: WHITE, fontSize: 9 },
+      styles: { fontSize: 9, cellPadding: 3 },
+      margin: { left: 15, right: 15 },
+      didParseCell: (data) => {
+        if (data.row.index === 0 && data.column.index === 1) {
+          data.cell.styles.textColor = scoreColor;
+          data.cell.styles.fontStyle = "bold";
+        }
+      },
+    });
+
+    let y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+
+    // ── Summary ──
+    doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK);
+    doc.text("Summary", 15, y);
+    doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(...GRAY);
+    const summaryLines = doc.splitTextToSize(feedback.summary, 180);
+    doc.text(summaryLines, 15, y + 6);
+    y = y + 6 + summaryLines.length * 5 + 8;
+
+    // ── Strengths & Weak Areas ──
+    doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK);
+    doc.text("Strengths & Areas to Improve", 15, y);
+    autoTable(doc, {
+      startY: y + 4,
+      head: [["✓ Strengths", "! Areas to Improve"]],
+      body: Array.from({ length: Math.max(feedback.strengths.length, feedback.weakAreas.length) }, (_, i) => [
+        feedback.strengths[i] ?? "",
+        feedback.weakAreas[i] ?? "",
+      ]),
+      theme: "grid",
+      headStyles: { fillColor: [30, 30, 46], textColor: WHITE, fontSize: 9 },
+      styles: { fontSize: 8, cellPadding: 3 },
+      margin: { left: 15, right: 15 },
+    });
+    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+
+    // ── Your Responses ──
+    const answeredQs = feedback.session.questions?.filter((q) => q.answers?.[0]?.text) ?? [];
+    if (answeredQs.length > 0) {
+      doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK);
+      doc.text("Your Responses", 15, y);
+      autoTable(doc, {
+        startY: y + 4,
+        head: [["#", "Question", "Your Answer"]],
+        body: answeredQs.map((q, i) => [String(i + 1), q.text, q.answers[0].text]),
+        theme: "striped",
+        headStyles: { fillColor: VIOLET, textColor: WHITE, fontSize: 9 },
+        styles: { fontSize: 8, cellPadding: 3 },
+        columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 80 } },
+        margin: { left: 15, right: 15 },
+      });
+      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+    }
+
+    // ── Improvement Roadmap ──
+    if (feedback.improvementRoadmap?.length > 0) {
+      doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK);
+      doc.text("Improvement Roadmap", 15, y);
+      autoTable(doc, {
+        startY: y + 4,
+        head: [["#", "Action Item"]],
+        body: feedback.improvementRoadmap.map((step, i) => [String(i + 1), step]),
+        theme: "striped",
+        headStyles: { fillColor: VIOLET, textColor: WHITE, fontSize: 9 },
+        styles: { fontSize: 8, cellPadding: 3 },
+        columnStyles: { 0: { cellWidth: 10 } },
+        margin: { left: 15, right: 15 },
+      });
+    }
+
+    // ── Footer ──
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8); doc.setTextColor(...GRAY);
+      doc.text(`AI Resume Coach — Interview Feedback — Page ${i}/${pageCount}`, 15, 290);
+    }
+
+    const filename = `feedback-${feedback.session.role.replace(/\s+/g, "-")}-${new Date().toISOString().split("T")[0]}.pdf`;
+    doc.save(filename);
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-10">
 
@@ -147,7 +366,13 @@ export default function FeedbackPage() {
             {feedback.session.title} · {formatDate(feedback.session.createdAt)}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={downloadPDF}>
+            <Download className="h-3 w-3" /> Download PDF
+          </Button>
+          <Button variant="outline" size="sm" onClick={downloadText}>
+            <FileText className="h-3 w-3" /> Download TXT
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href="/history">History</Link>
           </Button>

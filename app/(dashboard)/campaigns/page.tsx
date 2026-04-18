@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Plus, Users, Link2, Mail, CheckCircle, Clock, Loader2, ChevronRight, Copy, Check, Trash2, AlertCircle, Calendar, X, Download, FileText } from "lucide-react";
+import { Plus, Users, Link2, Mail, CheckCircle, Clock, Loader2, ChevronRight, Copy, Check, Trash2, AlertCircle, Calendar, X, Download, FileText, GitCompare, Upload, StickyNote, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -90,6 +90,16 @@ export default function CampaignsPage() {
   const [audioLoading, setAudioLoading] = useState<Record<string, boolean>>({});
   const [transcripts, setTranscripts] = useState<Record<string, string>>({});
   const [transcriptLoading, setTranscriptLoading] = useState<Record<string, boolean>>({});
+  const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+  const [showImport, setShowImport] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ created: number; skipped: number; errors: number } | null>(null);
+  const [notesInviteId, setNotesInviteId] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Array<{ id: string; text: string; createdAt: string }>>([]);
+  const [newNote, setNewNote] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [retakingId, setRetakingId] = useState("");
 
   // Slots state
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -120,6 +130,7 @@ export default function CampaignsPage() {
     setInviteResults([]);
     setShowSlots(false);
     setSlots([]);
+    setSelectedForCompare([]); // reset compare selection
     try {
       const res = await fetch(`/api/campaigns/${campaign.id}/invites`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -262,6 +273,76 @@ export default function CampaignsPage() {
     setTimeout(() => setCopiedToken(""), 2000);
   }
 
+  function toggleCompare(inviteId: string) {
+    setSelectedForCompare((prev) =>
+      prev.includes(inviteId)
+        ? prev.filter((id) => id !== inviteId)
+        : prev.length < 4 ? [...prev, inviteId] : prev
+    );
+  }
+
+  async function handleImport() {
+    if (!selected || !importFile) return;
+    setImporting(true);
+    const fd = new FormData();
+    fd.append("file", importFile);
+    fd.append("sendEmail", "true");
+    fd.append("companyName", "Our Company");
+    const res = await fetch(`/api/campaigns/${selected.id}/import`, { method: "POST", body: fd });
+    const data = await res.json();
+    setImportResult(data.summary);
+    setImporting(false);
+    setImportFile(null);
+    loadInvites(selected);
+  }
+
+  async function loadNotes(inviteId: string) {
+    setNotesInviteId(inviteId);
+    const res = await fetch(`/api/campaigns/notes/${inviteId}`);
+    const data = await res.json();
+    setNotes(data.notes ?? []);
+  }
+
+  async function handleAddNote() {
+    if (!newNote.trim() || !notesInviteId) return;
+    setSavingNote(true);
+    const res = await fetch(`/api/campaigns/notes/${notesInviteId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: newNote }),
+    });
+    const data = await res.json();
+    if (res.ok) { setNotes((p) => [data.note, ...p]); setNewNote(""); }
+    setSavingNote(false);
+  }
+
+  async function handleDeleteNote(noteId: string) {
+    if (!notesInviteId) return;
+    await fetch(`/api/campaigns/notes/${notesInviteId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ noteId }),
+    });
+    setNotes((p) => p.filter((n) => n.id !== noteId));
+  }
+
+  async function handleRetake(inviteId: string) {
+    if (!selected || !confirm("Create a new interview link for this candidate?")) return;
+    setRetakingId(inviteId);
+    const res = await fetch(`/api/campaigns/${selected.id}/retake`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inviteId }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      navigator.clipboard.writeText(data.link);
+      alert(`New link created and copied!\n${data.link}`);
+      loadInvites(selected);
+    }
+    setRetakingId("");
+  }
+
   const appUrl = typeof window !== "undefined" ? window.location.origin : "";
 
   return (
@@ -398,11 +479,36 @@ export default function CampaignsPage() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base">Send Invites — {selected.title}</CardTitle>
-                    <Button size="sm" variant="outline" onClick={() => setShowInvite(!showInvite)}>
-                      <Mail className="h-3.5 w-3.5" /> Add Candidates
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setShowImport(!showImport)}>
+                        <Upload className="h-3.5 w-3.5" /> Import CSV
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setShowInvite(!showInvite)}>
+                        <Mail className="h-3.5 w-3.5" /> Add Candidates
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
+                {showImport && (
+                  <CardContent className="space-y-3 pt-0 border-b border-border pb-4">
+                    <p className="text-xs text-muted-foreground">Upload a CSV file with columns: <code className="bg-secondary px-1 rounded">email, name</code> (header row optional)</p>
+                    <div className="flex gap-2 items-center">
+                      <input type="file" accept=".csv,.txt" onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                        className="text-xs text-muted-foreground file:mr-2 file:rounded file:border-0 file:bg-violet-600 file:text-white file:text-xs file:px-2 file:py-1 file:cursor-pointer" />
+                      <Button size="sm" onClick={handleImport} disabled={!importFile || importing}>
+                        {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                        {importing ? "Importing…" : "Import"}
+                      </Button>
+                    </div>
+                    {importResult && (
+                      <p className="text-xs">
+                        <span className="text-green-400">✓ {importResult.created} created</span>
+                        {importResult.skipped > 0 && <span className="text-yellow-400 ml-2">⚠ {importResult.skipped} skipped</span>}
+                        {importResult.errors > 0 && <span className="text-red-400 ml-2">✗ {importResult.errors} errors</span>}
+                      </p>
+                    )}
+                  </CardContent>
+                )}
                 {showInvite && (
                   <CardContent className="space-y-4 pt-0">
                   <div className="space-y-1.5">
@@ -590,13 +696,28 @@ export default function CampaignsPage() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base">Candidates ({invites.length})</CardTitle>
-                    {invites.length > 0 && selected && (
-                      <a href={`/api/campaigns/${selected.id}/export`} download
-                        className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors">
-                        <Download className="h-3.5 w-3.5" /> Export CSV
-                      </a>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {selectedForCompare.length >= 2 && (
+                        <a
+                          href={`/campaigns/compare?campaign=${selected.id}&ids=${selectedForCompare.join(",")}`}
+                          className="flex items-center gap-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 px-2.5 py-1.5 text-xs font-medium text-white transition-colors"
+                        >
+                          <GitCompare className="h-3.5 w-3.5" /> Compare ({selectedForCompare.length})
+                        </a>
+                      )}
+                      {invites.length > 0 && selected && (
+                        <a href={`/api/campaigns/${selected.id}/export`} download
+                          className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors">
+                          <Download className="h-3.5 w-3.5" /> Export CSV
+                        </a>
+                      )}
+                    </div>
                   </div>
+                  {invites.filter((i) => i.score !== null).length >= 2 && (
+                    <p className="text-xs text-muted-foreground">
+                      Select 2-4 completed candidates to compare
+                    </p>
+                  )}
                 </CardHeader>
                 <CardContent>
                   {invitesLoading ? (
@@ -608,98 +729,115 @@ export default function CampaignsPage() {
                       {invites.map((inv) => {
                         const link = `${appUrl}/interview/invite/${inv.token}`;
                         return (
-                          <div key={inv.id} className="flex items-center gap-3 rounded-lg border border-border p-3">
-                            {/* Candidate photo or avatar */}
-                            <div className="shrink-0">
-                              {inv.photoUrl ? (
-                                <img
-                                  src={inv.photoUrl}
-                                  alt={inv.name || inv.email}
-                                  className="w-20 h-20 rounded-xl object-cover border-2 border-violet-500/40 shadow-md"
-                                />
-                              ) : (
-                                <div className="w-20 h-20 rounded-xl bg-secondary flex items-center justify-center text-2xl font-bold text-muted-foreground">
-                                  {(inv.name || inv.email).charAt(0).toUpperCase()}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{inv.name || inv.email}</p>
-                              {inv.name && <p className="text-xs text-muted-foreground truncate">{inv.email}</p>}
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
+                          <div key={inv.id} className="rounded-lg border border-border p-3 space-y-2">
+                            {/* Row 1: checkbox + photo + info + badges */}
+                            <div className="flex items-center gap-3">
                               {inv.score !== null && (
-                                <span className={`text-sm font-bold ${getScoreColor(inv.score)}`}>{inv.score}/100</span>
+                                <input type="checkbox" checked={selectedForCompare.includes(inv.id)}
+                                  onChange={() => toggleCompare(inv.id)}
+                                  disabled={!selectedForCompare.includes(inv.id) && selectedForCompare.length >= 4}
+                                  className="h-4 w-4 rounded accent-violet-600 shrink-0 cursor-pointer" />
                               )}
-                              {/* Integrity flag badge */}
-                              {inv.integrityFlag && inv.integrityFlag !== "clean" && (
-                                <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold border ${
-                                  inv.integrityFlag === "suspicious"
-                                    ? "bg-red-500/20 border-red-500/50 text-red-400"
-                                    : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"
-                                }`}
-                                  title={inv.integrityFlag === "suspicious" ? "10+ violations — high risk" : "5+ violations — review recommended"}>
-                                  {inv.integrityFlag === "suspicious" ? "🚨 Suspicious" : "⚠️ Warning"}
-                                </span>
-                              )}
-                              {/* Tab switch warning badge */}
-                              {inv.tabSwitchCount > 0 && (
-                                <span
-                                  title={`Tab switched ${inv.tabSwitchCount} time(s) during interview`}
-                                  className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border ${
-                                    inv.tabSwitchCount >= 3
-                                      ? "bg-red-500/15 border-red-500/40 text-red-400"
-                                      : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"
-                                  }`}
-                                >
-                                  ⚠️ {inv.tabSwitchCount}x switch
-                                </span>
-                              )}
-                              {/* Proctoring violations */}
-                              {inv.proctoring && (inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste) > 0 && (
-                                <span
-                                  title={`Faces: ${inv.proctoring.multipleFaces} | Away: ${inv.proctoring.lookingAway} | Copy: ${inv.proctoring.copyPaste} | Noise: ${inv.proctoring.noise}`}
-                                  className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-red-500/15 border-red-500/40 text-red-400 cursor-help"
-                                >
-                                  🔍 {inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste} flags
-                                </span>
-                              )}
-                              <Badge variant={
-                                inv.status === "completed" ? "success" :
-                                inv.status === "started" ? "warning" :
-                                inv.status === "abandoned" ? "destructive" : "secondary"
-                              }>
-                                {inv.status === "completed" ? <CheckCircle className="h-3 w-3 mr-1" /> :
-                                 inv.status === "abandoned" ? <span className="mr-1">✗</span> :
-                                 <Clock className="h-3 w-3 mr-1" />}
-                                {inv.status === "abandoned" ? "left midway" : inv.status}
-                              </Badge>
-                              <button onClick={() => copyLink(link, inv.token)}
-                                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-violet-400 transition-colors">
-                                {copiedToken === inv.token ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
-                              </button>
-                            </div>
-                            {/* Audio player */}
-                            {inv.hasAudio && inv.sessionId && (
-                              <div className="mt-2 pt-2 border-t border-border/50">
-                                {audioUrls[inv.sessionId] ? (
-                                  <audio
-                                    controls
-                                    src={audioUrls[inv.sessionId]}
-                                    className="w-full h-8"
-                                    style={{ colorScheme: "dark" }}
-                                  />
+                              <div className="shrink-0">
+                                {inv.photoUrl ? (
+                                  <img src={inv.photoUrl} alt={inv.name || inv.email}
+                                    className="w-16 h-16 rounded-xl object-cover border-2 border-violet-500/40 shadow-md" />
                                 ) : (
-                                  <button
-                                    onClick={() => handlePlayAudio(inv.sessionId!)}
-                                    disabled={audioLoading[inv.sessionId]}
-                                    className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition-colors"
-                                  >
-                                    {audioLoading[inv.sessionId]
-                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                      : <span>🎧</span>}
-                                    {audioLoading[inv.sessionId] ? "Loading…" : "Play Interview Recording"}
+                                  <div className="w-16 h-16 rounded-xl bg-secondary flex items-center justify-center text-xl font-bold text-muted-foreground">
+                                    {(inv.name || inv.email).charAt(0).toUpperCase()}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{inv.name || inv.email}</p>
+                                {inv.name && <p className="text-xs text-muted-foreground truncate">{inv.email}</p>}
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                {inv.score !== null && (
+                                  <span className={`text-sm font-bold ${getScoreColor(inv.score)}`}>{inv.score}/100</span>
+                                )}
+                                {inv.integrityFlag && inv.integrityFlag !== "clean" && (
+                                  <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold border ${inv.integrityFlag === "suspicious" ? "bg-red-500/20 border-red-500/50 text-red-400" : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"}`}>
+                                    {inv.integrityFlag === "suspicious" ? "🚨 Suspicious" : "⚠️ Warning"}
+                                  </span>
+                                )}
+                                {inv.tabSwitchCount > 0 && (
+                                  <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border ${inv.tabSwitchCount >= 3 ? "bg-red-500/15 border-red-500/40 text-red-400" : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"}`}>
+                                    ⚠️ {inv.tabSwitchCount}x
+                                  </span>
+                                )}
+                                {inv.proctoring && (inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste) > 0 && (
+                                  <span className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-red-500/15 border-red-500/40 text-red-400">
+                                    🔍 {inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste}
+                                  </span>
+                                )}
+                                <Badge variant={inv.status === "completed" ? "success" : inv.status === "started" ? "warning" : inv.status === "abandoned" ? "destructive" : "secondary"}>
+                                  {inv.status === "completed" ? <CheckCircle className="h-3 w-3 mr-1" /> : inv.status === "abandoned" ? <span className="mr-1">✗</span> : <Clock className="h-3 w-3 mr-1" />}
+                                  {inv.status === "abandoned" ? "left midway" : inv.status}
+                                </Badge>
+                                <button onClick={() => copyLink(link, inv.token)} className="text-muted-foreground hover:text-violet-400 transition-colors">
+                                  {copiedToken === inv.token ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
+                                </button>
+                                <button onClick={() => notesInviteId === inv.id ? setNotesInviteId(null) : loadNotes(inv.id)}
+                                  title="Notes" className={`transition-colors ${notesInviteId === inv.id ? "text-violet-400" : "text-muted-foreground hover:text-violet-400"}`}>
+                                  <StickyNote className="h-3.5 w-3.5" />
+                                </button>
+                                {inv.status === "completed" && (
+                                  <button onClick={() => handleRetake(inv.id)} disabled={retakingId === inv.id}
+                                    title="Allow retake" className="text-muted-foreground hover:text-green-400 transition-colors">
+                                    {retakingId === inv.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                                   </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Row 2: Audio player */}
+                            {inv.hasAudio && inv.sessionId && (
+                              <div>
+                                {audioUrls[inv.sessionId] ? (
+                                  <div className="space-y-1">
+                                    <audio controls preload="auto" src={audioUrls[inv.sessionId]} className="w-full h-10" style={{ colorScheme: "dark" }} />
+                                    <a href={audioUrls[inv.sessionId]} target="_blank" rel="noopener noreferrer" className="text-[10px] text-violet-400 hover:underline">
+                                      Open in new tab if player doesn&apos;t work
+                                    </a>
+                                  </div>
+                                ) : (
+                                  <button onClick={() => handlePlayAudio(inv.sessionId!)} disabled={audioLoading[inv.sessionId!]}
+                                    className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 border border-violet-500/30 rounded-lg px-3 py-1.5 w-full justify-center">
+                                    {audioLoading[inv.sessionId!] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span>🎧</span>}
+                                    {audioLoading[inv.sessionId!] ? "Loading audio…" : "Play Interview Recording"}
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Row 3: Notes panel */}
+                            {notesInviteId === inv.id && (
+                              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-3 space-y-2">
+                                <p className="text-xs font-semibold text-violet-400 flex items-center gap-1.5">
+                                  <StickyNote className="h-3.5 w-3.5" /> Recruiter Notes
+                                </p>
+                                <div className="flex gap-2">
+                                  <input type="text" placeholder="Add a private note…" value={newNote}
+                                    onChange={(e) => setNewNote(e.target.value)}
+                                    onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
+                                    className="flex-1 rounded-lg border border-input bg-background px-2 py-1 text-xs outline-none focus:border-violet-500" />
+                                  <button onClick={handleAddNote} disabled={savingNote || !newNote.trim()}
+                                    className="rounded-lg bg-violet-600 hover:bg-violet-700 px-2 py-1 text-xs text-white disabled:opacity-40">
+                                    {savingNote ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
+                                  </button>
+                                </div>
+                                {notes.length > 0 ? (
+                                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                                    {notes.map((n) => (
+                                      <div key={n.id} className="flex items-start gap-2 text-xs">
+                                        <p className="flex-1 text-muted-foreground">{n.text}</p>
+                                        <button onClick={() => handleDeleteNote(n.id)} className="text-muted-foreground hover:text-red-400 shrink-0">×</button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-muted-foreground">No notes yet</p>
                                 )}
                               </div>
                             )}

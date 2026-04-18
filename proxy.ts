@@ -57,7 +57,13 @@ function getIP(req: NextRequest): string {
 }
 
 // ── Protected dashboard routes ───────────────────────────────────
-const PROTECTED_PREFIXES = ["/dashboard", "/interview", "/history", "/campaigns", "/feedback", "/upload-resume", "/resume-report", "/settings", "/billing", "/team", "/admin", "/chat", "/question-bank"];
+// NOTE: /interview/invite is PUBLIC (candidate link) — NOT in this list
+const PROTECTED_PREFIXES = [
+  "/dashboard", "/history", "/campaigns", "/feedback",
+  "/upload-resume", "/resume-report", "/settings", "/billing",
+  "/team", "/admin", "/chat", "/question-bank",
+  "/interview/setup", "/interview/session", // only these interview routes need auth
+];
 
 // ── API rate limits ──────────────────────────────────────────────
 const API_RATE_LIMITS: Record<string, { limit: number; windowMs: number }> = {
