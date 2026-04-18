@@ -137,6 +137,7 @@ export default function FeedbackPage() {
   ];
 
   function downloadText() {
+    if (!feedback) return;
     const lines: string[] = [];
     lines.push(`INTERVIEW FEEDBACK REPORT`);
     lines.push(`${"=".repeat(50)}`);
@@ -201,6 +202,7 @@ export default function FeedbackPage() {
   }
 
   function downloadJSON() {
+    if (!feedback) return;
     const data = {
       session: feedback.session,
       scores: {
@@ -228,6 +230,7 @@ export default function FeedbackPage() {
   }
 
   async function downloadPDF() {
+    if (!feedback) return;
     const { jsPDF } = await import("jspdf");
     const autoTable = (await import("jspdf-autotable")).default;
 
