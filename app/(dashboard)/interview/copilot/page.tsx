@@ -40,6 +40,10 @@ export default function InterviewCopilotPage() {
   const [linkCreateBusy, setLinkCreateBusy] = useState(false);
   const [linkErr, setLinkErr] = useState<string | null>(null);
   const [syncToPhone, setSyncToPhone] = useState(true);
+  /** Sirf Chrome "Share meeting tab" + tab audio se aaya hua (interviewer / call output), mic+Whisper alag */
+  const [meetingTranscript, setMeetingTranscript] = useState("");
+  /** true = phone par sirf meetingTranscript; false = purana: mic/Whisper wala bhi bhejo */
+  const [phoneSyncFromMeetingOnly, setPhoneSyncFromMeetingOnly] = useState(true);
   const linkPushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const processingRef = useRef(false);
@@ -49,6 +53,7 @@ export default function InterviewCopilotPage() {
   const directRef = useRef(directMode);
   /** When desktop tab-audio is active, do not auto-restart phone mic in runProcess. */
   const tabCaptureRef = useRef(false);
+  const [meetingTabActive, setMeetingTabActive] = useState(false);
   const sttEngineRef = useRef(sttEngine);
   const whisperAccRef = useRef("");
   const whisperDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -71,7 +76,7 @@ export default function InterviewCopilotPage() {
       linkPushRef.current = null;
     }
     if (!linkInfo || !syncToPhone) return;
-    const t = liveTranscript.trim();
+    const t = (phoneSyncFromMeetingOnly ? meetingTranscript : liveTranscript).trim();
     if (t.length < 1) return;
     linkPushRef.current = setTimeout(() => {
       void fetch("/api/copilot-link/push", {
@@ -88,7 +93,7 @@ export default function InterviewCopilotPage() {
         linkPushRef.current = null;
       }
     };
-  }, [linkInfo, syncToPhone, liveTranscript]);
+  }, [linkInfo, syncToPhone, liveTranscript, meetingTranscript, phoneSyncFromMeetingOnly]);
 
   const runProcess = useCallback(
     async (text: string) => {
@@ -219,6 +224,7 @@ export default function InterviewCopilotPage() {
     (text: string) => {
       const t = text.trim();
       if (t.length < 8) return;
+      setMeetingTranscript(t);
       setLiveTranscript(t);
       void runProcess(t);
     },
@@ -273,7 +279,10 @@ export default function InterviewCopilotPage() {
             Phone: answer yahan, sunai laptop se
           </div>
           <p className="text-[11px] text-zinc-500 leading-relaxed">
-            Laptop = tab/mic se STT. Is link se same account pe phone se suggested answer. Token link mein hidden — 2h baad khatam.
+            <strong className="text-zinc-400">Interviewer ke sawal:</strong> laptop (Chrome) par neeche{" "}
+            <strong className="text-amber-200/90">“Share meeting tab”</strong> on rakho, call{" "}
+            <strong>browser tab</strong> mein ho. Default: phone par <strong>sirf meeting</strong> wala text jata
+            hai—apna mic/Whisper alag. Token ~2h.
           </p>
           {!linkInfo ? (
             <Button
@@ -370,15 +379,34 @@ export default function InterviewCopilotPage() {
                   </div>
                 </div>
               </div>
-              <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer select-none">
+              <label className="flex items-start gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={phoneSyncFromMeetingOnly}
+                  onChange={(e) => setPhoneSyncFromMeetingOnly(e.target.checked)}
+                  className="mt-0.5 rounded border-zinc-600 bg-zinc-900"
+                />
+                <span>
+                  <strong className="text-emerald-200/90">Phone = sirf meeting tab (interviewer)</strong> — apni
+                  mic/Whisper wala phone par na bhejein. Band = poora &quot;Live text&quot; (aap bhi bol rahe ho to woh
+                  bhi jayega).
+                </span>
+              </label>
+              <label className="flex items-center gap-2 text-xs text-zinc-500 cursor-pointer select-none pl-0.5">
                 <input
                   type="checkbox"
                   checked={syncToPhone}
                   onChange={(e) => setSyncToPhone(e.target.checked)}
                   className="rounded border-zinc-600 bg-zinc-900"
                 />
-                Neeche wala live text phone par sync karo (debounced)
+                Chosen text phone par bhejo (debounced)
               </label>
+              {phoneSyncFromMeetingOnly && linkInfo && !meetingTranscript.trim() && (
+                <p className="text-[11px] text-amber-400/90 leading-snug pl-0.5">
+                  Abhi phone ko kuch nahi bhej rahe: pehle laptop par <strong>Share meeting tab</strong> se meeting
+                  audio capture karein. Sirf &quot;Start listening (mic)&quot; se interviewer ki awaaz nahi aati.
+                </p>
+              )}
             </div>
           )}
           {linkErr && <p className="text-[11px] text-amber-400">{linkErr}</p>}
@@ -422,9 +450,12 @@ export default function InterviewCopilotPage() {
             onTranscript={handleTabTranscript}
             onCaptureStateChange={(on) => {
               tabCaptureRef.current = on;
+              setMeetingTabActive(on);
               if (on) {
                 stop();
                 setWhisperOn(false);
+              } else {
+                setMeetingTranscript("");
               }
             }}
           />
@@ -616,9 +647,11 @@ export default function InterviewCopilotPage() {
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 min-h-[4.5rem]">
           <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-            {sttEngine === "whisper"
-              ? "Live text (Whisper / Groq — behtar English & tech, har ~5s update)"
-              : "Live text (Browser STT — tech words aksar wrong)"}
+            {meetingTabActive
+              ? "Live text — meeting tab (interviewer / call audio; phone pe yahi default)"
+              : sttEngine === "whisper"
+                ? "Live text (Whisper / mic aap ke paas se)"
+                : "Live text (Browser STT — tech words aksar wrong)"}
           </p>
           <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words min-h-[3rem]">
             {liveTranscript ||
