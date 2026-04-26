@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Loader2, MessageSquare, Phone, RefreshCw } from "lucide-react";
+import { Info, Loader2, MessageSquare, Phone, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const POLL_MS = 1600;
@@ -128,6 +128,7 @@ export function CopilotPhoneContent() {
   const ok = data && "ok" in data && data.ok;
   const expired = data && "ok" in data && !data.ok && "expired" in data && data.expired;
   const notFound = data && "ok" in data && !data.ok && "notFound" in data && data.notFound;
+  const waitingForLaptop = Boolean(ok && data.seq === 0 && !String(data.text ?? "").trim());
 
   return (
     <div className="min-h-dvh bg-zinc-950 text-zinc-200 p-4 max-w-md mx-auto space-y-4">
@@ -135,6 +136,18 @@ export function CopilotPhoneContent() {
         <Phone className="h-6 w-6" />
         <h1 className="text-base font-semibold">Copilot (phone)</h1>
       </header>
+      <div className="rounded-lg border border-amber-500/35 bg-amber-950/25 p-3 space-y-2 text-[11px] text-amber-100/90 leading-relaxed">
+        <p className="flex items-start gap-2 font-medium text-amber-200">
+          <Info className="h-4 w-4 shrink-0 mt-0.5" />
+          This page does <strong className="font-semibold">not</strong> capture Google Meet or other audio on this phone.
+          It only shows text that your <strong className="font-semibold">laptop</strong> sent to the server (Copilot + link
+          session).
+        </p>
+        <p className="text-amber-200/80 pl-6">
+          If you only join Meet on this phone, you will stay on <code className="text-zinc-400">seq 0</code> — start the
+          flow on the laptop first.
+        </p>
+      </div>
       <p className="text-[11px] text-zinc-500">
         Text comes from the laptop (tab audio / STT). Same account, resume/RAG. Mock practice only.
       </p>
@@ -150,7 +163,7 @@ export function CopilotPhoneContent() {
             onChange={(e) => setDirect(e.target.checked)}
             className="rounded border-zinc-600"
           />
-          Direct (turant jawab)
+          Direct (instant answer)
         </label>
         <label className="flex items-center gap-2 text-xs text-zinc-400">
           <input
@@ -163,9 +176,36 @@ export function CopilotPhoneContent() {
         </label>
       </div>
 
-      {notFound && <p className="text-sm text-amber-400">Invalid or expired link.</p>}
+      {notFound && <p className="text-sm text-amber-400">Invalid or unknown link.</p>}
       {expired && <p className="text-sm text-amber-400">This link has expired. Create a new one on the laptop.</p>}
       {err && <p className="text-sm text-red-400">{err}</p>}
+
+      {waitingForLaptop && (
+        <div className="rounded-lg border border-zinc-700/80 bg-zinc-900/50 p-3 space-y-2 text-[11px] text-zinc-400 leading-relaxed">
+          <p className="text-zinc-300 font-medium text-xs">
+            On the laptop, do the following (then <code className="text-violet-400">seq 0</code> will update):
+          </p>
+          <ol className="list-decimal pl-4 space-y-1.5">
+            <li>
+              On your <strong className="text-zinc-300">laptop</strong>, in Chrome or Edge, log in and open{" "}
+              <strong className="text-zinc-300">Interview Copilot</strong>
+            </li>
+            <li>
+              <strong className="text-zinc-300">Create phone link</strong> and open the same URL on this device (include the
+              full <code className="text-zinc-500">?t=…</code> query)
+            </li>
+            <li>
+              Turn on <strong className="text-zinc-300">“Sync text to phone”</strong> — to capture the interviewer: use{" "}
+              <strong className="text-zinc-300">Share meeting tab</strong> with tab audio, or turn off “meeting only” and
+              use mic / Whisper
+            </li>
+            <li>
+              Use the <strong className="text-zinc-300">same app URL</strong> on laptop and phone (same account / database);
+              links expire after about <strong className="text-zinc-300">2 hours</strong>
+            </li>
+          </ol>
+        </div>
+      )}
 
       <section className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 space-y-1">
         <p className="text-[10px] uppercase text-zinc-500">From laptop (latest)</p>
