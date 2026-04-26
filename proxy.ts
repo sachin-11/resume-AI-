@@ -62,12 +62,13 @@ const PROTECTED_PREFIXES = [
   "/dashboard", "/history", "/campaigns", "/feedback",
   "/upload-resume", "/resume-report", "/settings", "/billing",
   "/team", "/admin", "/chat", "/question-bank",
-  "/interview/setup", "/interview/session", // only these interview routes need auth
+  "/interview/setup", "/interview/session", "/interview/copilot",
 ];
 
 // ── API rate limits ──────────────────────────────────────────────
 const API_RATE_LIMITS: Record<string, { limit: number; windowMs: number }> = {
   "/api/chat":                    { limit: 20,  windowMs: 60_000 },       // 20/min
+  "/api/interview/copilot":      { limit: 15,  windowMs: 60_000 },        // 15/min
   "/api/interview/create":        { limit: 10,  windowMs: 60_000 },       // 10/min
   "/api/feedback/generate":       { limit: 10,  windowMs: 60_000 },       // 10/min
   "/api/resume/upload":           { limit: 5,   windowMs: 60_000 },       // 5/min

@@ -127,13 +127,14 @@ export default function ChatPage() {
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-600">
               <Bot className="h-4 w-4 text-white" />
             </div>
-            <Card className="px-4 py-3.5 bg-card border-border rounded-tl-sm">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 bg-violet-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                <span className="w-2.5 h-2.5 bg-violet-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                <span className="w-2.5 h-2.5 bg-violet-400 rounded-full animate-bounce [animation-delay:300ms]" />
+            <div className="rounded-2xl rounded-tl-sm border border-border bg-card px-5 py-4">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                <span className="w-2.5 h-2.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                <span className="w-2.5 h-2.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
               </div>
-            </Card>
+              <p className="text-xs text-muted-foreground mt-2">Thinking...</p>
+            </div>
           </div>
         )}
         <div ref={bottomRef} />
