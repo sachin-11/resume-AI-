@@ -20,9 +20,25 @@ function getPinecone(): Pinecone {
   return _pc;
 }
 
+export function getPineconeIndexName(): string {
+  return process.env.PINECONE_INDEX ?? "resume-coach";
+}
+
+/** If Pinecone returns 404 (index missing / wrong name), skip further calls this process — avoids log spam. */
+let pineconeIndexUnavailable = false;
+
 function getIndex() {
-  const indexName = process.env.PINECONE_INDEX ?? "resume-coach";
-  return getPinecone().index(indexName);
+  return getPinecone().index(getPineconeIndexName());
+}
+
+function isPineconeIndexMissingError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/\b404\b|not found|UnknownIndex|does not exist|INDEX.*NOT.*FOUND/i.test(msg)) return true;
+  if (err && typeof err === "object" && "status" in err) {
+    const s = (err as { status?: number }).status;
+    if (s === 404) return true;
+  }
+  return false;
 }
 
 // ── Groq embedding (using llama text-embedding model) ───────────
@@ -49,11 +65,11 @@ async function getEmbedding(text: string): Promise<number[]> {
 }
 
 /**
- * Pseudo-embedding: 384-dim vector from text statistics
- * Not semantic but consistent — good enough for demo/fallback
+ * Pseudo-embedding: dim must match the Pinecone index (OpenAI `text-embedding-3-small` = 1536 by default).
+ * If you only ever use pseudo, create the index with the same dim or set PINECONE_PSEUDO_DIM=384, etc.
  */
 function pseudoEmbed(text: string): number[] {
-  const dim = 384;
+  const dim = Number(process.env.PINECONE_PSEUDO_DIM) || 1536;
   const vec = new Array(dim).fill(0);
   const words = text.toLowerCase().split(/\W+/).filter(Boolean);
 
@@ -90,6 +106,7 @@ export function chunkText(text: string, chunkSize = 500, overlap = 100): string[
 // ── INDEX: Store resume in Pinecone ─────────────────────────────
 export async function indexResume(resumeId: string, userId: string, resumeText: string): Promise<void> {
   if (!process.env.PINECONE_API_KEY) return; // Skip if not configured
+  if (pineconeIndexUnavailable) return;
 
   try {
     const index = getIndex();
@@ -118,8 +135,15 @@ export async function indexResume(resumeId: string, userId: string, resumeText: 
 
     console.log(`[RAG] Indexed ${vectors.length} chunks for resume ${resumeId}`);
   } catch (err) {
-    console.error("[RAG] Index error:", err);
-    // Non-blocking — don't fail the upload
+    if (isPineconeIndexMissingError(err)) {
+      pineconeIndexUnavailable = true;
+      console.warn(
+        `[RAG] Index "${getPineconeIndexName()}" not found in Pinecone — vectors not saved. ` +
+          `Create an index (or set PINECONE_INDEX) in https://app.pinecone.io/ then restart the app.`
+      );
+    } else {
+      console.error("[RAG] Index error:", err);
+    }
   }
 }
 
@@ -130,6 +154,7 @@ export async function retrieveRelevantChunks(
   topK = 5
 ): Promise<string[]> {
   if (!process.env.PINECONE_API_KEY) return [];
+  if (pineconeIndexUnavailable) return [];
 
   try {
     const index = getIndex();
@@ -138,7 +163,8 @@ export async function retrieveRelevantChunks(
     const results = await index.query({
       vector: queryEmbedding,
       topK,
-      filter: { userId },
+      // Serverless + newer APIs: explicit $eq (plain { userId } can fail in some projects)
+      filter: { userId: { $eq: userId } },
       includeMetadata: true,
     });
 
@@ -147,7 +173,21 @@ export async function retrieveRelevantChunks(
       .map((m) => (m.metadata?.text as string) ?? "")
       .filter(Boolean) ?? [];
   } catch (err) {
-    console.error("[RAG] Retrieve error:", err);
+    if (isPineconeIndexMissingError(err)) {
+      pineconeIndexUnavailable = true;
+      console.warn(
+        `[RAG] Pinecone index "${getPineconeIndexName()}" not found (404). ` +
+          `Create it in the Pinecone console (same name as PINECONE_INDEX) or fix your API key’s project. ` +
+          `Copilot still answers using your latest resume in the database; RAG adds smarter snippets after the index exists (restart the app then).`
+      );
+    } else {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        "[RAG] Retrieve error:",
+        msg,
+        "— check dimension (OPENAI 1536 vs PINECONE_PSEUDO_DIM) and metadata userId on vectors."
+      );
+    }
     return [];
   }
 }
@@ -155,11 +195,12 @@ export async function retrieveRelevantChunks(
 // ── DELETE: Remove resume vectors ───────────────────────────────
 export async function deleteResumeVectors(resumeId: string): Promise<void> {
   if (!process.env.PINECONE_API_KEY) return;
+  if (pineconeIndexUnavailable) return;
 
   try {
     const index = getIndex();
     // Delete all vectors whose metadata.resumeId matches
-    await index.deleteMany({ filter: { resumeId } });
+    await index.deleteMany({ filter: { resumeId: { $eq: resumeId } } });
   } catch (err) {
     console.error("[RAG] Delete error:", err);
   }

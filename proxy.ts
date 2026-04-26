@@ -68,12 +68,13 @@ const PROTECTED_PREFIXES = [
 // ── API rate limits ──────────────────────────────────────────────
 const API_RATE_LIMITS: Record<string, { limit: number; windowMs: number }> = {
   "/api/chat":                    { limit: 20,  windowMs: 60_000 },       // 20/min
-  "/api/interview/copilot":      { limit: 15,  windowMs: 60_000 },        // 15/min
+  "/api/interview/copilot":      { limit: 15,  windowMs: 60_000 },        // 15/min (includes transcribe)
   "/api/interview/create":        { limit: 10,  windowMs: 60_000 },       // 10/min
   "/api/feedback/generate":       { limit: 10,  windowMs: 60_000 },       // 10/min
   "/api/resume/upload":           { limit: 5,   windowMs: 60_000 },       // 5/min
   "/api/resume/analyze":          { limit: 5,   windowMs: 60_000 },       // 5/min
   "/api/campaigns":               { limit: 30,  windowMs: 60_000 },       // 30/min
+  "/api/copilot-link":            { limit: 100, windowMs: 60_000 },      // poll + push + create
   "/api/auth/forgot-password":    { limit: 3,   windowMs: 15 * 60_000 },  // 3 per 15min
   "/api/auth/reset-password":     { limit: 5,   windowMs: 15 * 60_000 },  // 5 per 15min
   "/api/auth/otp/send":           { limit: 3,   windowMs: 10 * 60_000 },  // 3 per 10min

@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     return rateLimitResponse(rl);
   }
 
-  let body: { text?: string };
+  let body: { text?: string; direct?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -31,8 +31,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Text too short" }, { status: 400 });
   }
 
+  // Default direct=true: turant answer (koi alag "generate" step nahi)
+  const direct = body.direct !== false;
+
   try {
-    const result = await processCopilotTranscript(session.user.id, text);
+    const result = await processCopilotTranscript(session.user.id, text, { direct });
     if (result.action === "skip") {
       return NextResponse.json({ action: "skip", reason: result.reason });
     }

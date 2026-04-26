@@ -41,10 +41,30 @@ export async function classifyTranscript(
     return { isQuestion: false, relevant: false, cleanedQuestion: null };
   }
 
-  const out = await callGroq(CLASSIFIER_SYSTEM, `Transcript:\n${clean}`);
+  // Use fastest Groq model for classification
+  const Groq = (await import("groq-sdk")).default;
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+  let out = "";
+  try {
+    const res = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant", // fastest model
+      messages: [
+        { role: "system", content: CLASSIFIER_SYSTEM },
+        { role: "user", content: `Transcript:\n${clean}` },
+      ],
+      max_tokens: 120,
+      temperature: 0,
+    });
+    out = res.choices[0]?.message?.content ?? "";
+  } catch {
+    // fallback — assume it's a question
+    return { isQuestion: true, relevant: true, cleanedQuestion: clean.slice(0, 500) };
+  }
+
   const j = parseJsonObject(out);
   if (!j) {
-    return { isQuestion: false, relevant: false, cleanedQuestion: null };
+    return { isQuestion: true, relevant: true, cleanedQuestion: clean.slice(0, 500) };
   }
 
   let cleaned =
@@ -97,16 +117,43 @@ export type CopilotProcessResult =
   | { action: "skip"; reason: string }
   | { action: "answer"; question: string; answer: string };
 
+export type ProcessCopilotOptions = {
+  /**
+   * `true` (default): jo tum bolte ho use seedha "question" maan ke turant answer — classifier skip, ek hi LLM call.
+   * `false` ("smart"): pehle check kare ki interview-jaisa sawaal hai; warna skip (zyaada cost + latency).
+   */
+  direct?: boolean;
+};
+
 export async function processCopilotTranscript(
   userId: string,
-  text: string
+  text: string,
+  options: ProcessCopilotOptions = {}
 ): Promise<CopilotProcessResult> {
-  const c = await classifyTranscript(text);
+  const clean = stripHtml(text).trim().slice(0, 2000);
+  if (clean.length < 8) return { action: "skip", reason: "too_short" };
 
-  if (!c.isQuestion || !c.relevant || !c.cleanedQuestion) {
-    return { action: "skip", reason: "not_a_question" };
+  const direct = options.direct !== false;
+
+  if (direct) {
+    const answer = await generateCopilotAnswer(userId, clean);
+    const displayQ = clean.length > 320 ? `${clean.slice(0, 320)}…` : clean;
+    return {
+      action: "answer",
+      question: displayQ,
+      answer: answer.trim(),
+    };
   }
 
-  const answer = await generateCopilotAnswer(userId, c.cleanedQuestion);
-  return { action: "answer", question: c.cleanedQuestion, answer: answer.trim() };
+  const classification = await classifyTranscript(clean);
+  if (!classification.isQuestion || !classification.relevant) {
+    return { action: "skip", reason: "not_a_question" };
+  }
+  const q = classification.cleanedQuestion ?? clean.slice(0, 200);
+  const answer = await generateCopilotAnswer(userId, q);
+  return {
+    action: "answer",
+    question: q,
+    answer: answer.trim(),
+  };
 }
