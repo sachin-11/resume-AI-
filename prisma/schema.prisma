@@ -36,6 +36,7 @@ model User {
   questionBank     QuestionBank[]
   webhooks         WebhookConfig[]
   copilotLinkSessions CopilotLinkSession[]
+  jobDescriptions  JobDescription[]
 }
 
 // ── Laptop ↔ phone (same account): share STT text for answer on phone ─
@@ -88,6 +89,7 @@ model Resume {
   updatedAt       DateTime  @updatedAt
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   interviewSessions InterviewSession[]
+  resumeMatches   ResumeMatch[]
 }
 
 model InterviewSession {
@@ -260,6 +262,38 @@ model CandidateNote {
   invite    CandidateInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
 
   @@index([inviteId])
+}
+
+// ── Job Description & Resume Matching ───────────────────────────
+model JobDescription {
+  id          String        @id @default(cuid())
+  userId      String
+  title       String
+  company     String?
+  description String        @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matches     ResumeMatch[]
+
+  @@index([userId])
+}
+
+model ResumeMatch {
+  id               String         @id @default(cuid())
+  jobDescriptionId String
+  resumeId         String
+  score            Int            // 0-100
+  missingSkills    String[]
+  matchedSkills    String[]
+  summary          String         @db.Text
+  recommendation   String         // strong_match | good_match | partial_match | weak_match
+  createdAt        DateTime       @default(now())
+  jobDescription   JobDescription @relation(fields: [jobDescriptionId], references: [id], onDelete: Cascade)
+  resume           Resume         @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  @@unique([jobDescriptionId, resumeId])
+  @@index([jobDescriptionId])
 }
 
 // ── Interview Scheduling ─────────────────────────────────────────

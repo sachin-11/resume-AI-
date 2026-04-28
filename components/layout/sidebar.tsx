@@ -6,7 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, FileText, Upload, MessageSquare,
   BarChart3, Settings, LogOut, Brain, ChevronRight,
-  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Headphones, Menu, X, Sun, Moon,
+  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Headphones, Menu, X, Sun, Moon, Briefcase,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ const NAV_ITEMS = [
   { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones,   perm: "viewInterviews" },
   { href: "/history",           label: "Interview History", icon: BarChart3,     perm: "viewInterviews" },
   { href: "/campaigns",         label: "Bulk Interviews",   icon: Users,         perm: "viewCampaigns" },
+  { href: "/job-match",         label: "Job Match",         icon: Briefcase,     perm: "viewCampaigns" },
   { href: "/question-bank",     label: "Question Bank",     icon: BookOpen,      perm: "createInterview" },
   { href: "/team",              label: "Team",              icon: Shield,        perm: "viewTeam" },
   { href: "/settings/webhooks", label: "Webhooks",          icon: Zap,           perm: "manageTeam" },
