@@ -20,19 +20,24 @@ export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const apps = await db.jobApplication.findMany({
-    where: { userId: session.user.id },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true, jobTitle: true, company: true, jobUrl: true,
-      status: true, createdAt: true, appliedAt: true,
-      coverLetter: true, interviewQuestions: true,
-      applicationChecklist: true, resumeGapAnalysis: true,
-      resumeId: true,
-    },
-  });
-
-  return NextResponse.json({ applications: apps });
+  try {
+    const apps = await db.jobApplication.findMany({
+      where: { userId: session.user.id },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true, jobTitle: true, company: true, jobUrl: true,
+        status: true, createdAt: true, appliedAt: true,
+        coverLetter: true, interviewQuestions: true,
+        applicationChecklist: true, resumeGapAnalysis: true,
+        resumeId: true,
+      },
+    });
+    return NextResponse.json({ applications: apps });
+  } catch (err) {
+    console.error("[JOB_AGENT_GET]", err);
+    // Return empty array instead of crashing — table may not exist yet in production
+    return NextResponse.json({ applications: [] });
+  }
 }
 
 export async function POST(req: NextRequest) {

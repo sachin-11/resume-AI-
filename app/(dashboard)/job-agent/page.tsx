@@ -638,15 +638,22 @@ export default function JobAgentPage() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const [appsRes, resumesRes] = await Promise.all([
-      fetch("/api/job-agent"),
-      fetch("/api/resume/list"),
-    ]);
-    const appsData = await appsRes.json();
-    const resumesData = await resumesRes.json();
-    setApplications(appsData.applications ?? []);
-    setResumes(resumesData.resumes ?? []);
-    setLoading(false);
+    try {
+      const [appsRes, resumesRes] = await Promise.all([
+        fetch("/api/job-agent"),
+        fetch("/api/resume/list"),
+      ]);
+      const appsData = await appsRes.json();
+      const resumesData = await resumesRes.json();
+      setApplications(appsData.applications ?? []);
+      setResumes(resumesData.resumes ?? []);
+    } catch (err) {
+      console.error("[JOB_AGENT_FETCH]", err);
+      setApplications([]);
+      setResumes([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
