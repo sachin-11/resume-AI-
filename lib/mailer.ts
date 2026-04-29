@@ -377,3 +377,55 @@ export async function sendPasswordResetEmail({
 </html>`,
   });
 }
+
+// ── 6. HR Direct Email (Job Application Agent) ───────────────────
+export async function sendHREmail({
+  to,
+  subject,
+  body,
+  senderName,
+  replyTo,
+}: {
+  to: string;
+  subject: string;
+  body: string;        // plain text — we wrap it in HTML
+  senderName: string;
+  replyTo?: string;
+}) {
+  const transporter = getTransporter();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
+  // Convert plain text paragraphs to HTML
+  const bodyHtml = body
+    .split(/\n\n+/)
+    .map((p) => `<p style="color:#1e293b;line-height:1.7;margin:0 0 14px;font-size:14px">${p.replace(/\n/g, "<br/>")}</p>`)
+    .join("");
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;margin:0;padding:32px 16px">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+    <div style="background:#1e293b;padding:20px 28px">
+      <p style="color:#94a3b8;font-size:11px;margin:0 0 2px;text-transform:uppercase;letter-spacing:1px">Job Application</p>
+      <h2 style="color:#f8fafc;margin:0;font-size:16px;font-weight:600">${subject}</h2>
+    </div>
+    <div style="padding:28px">
+      ${bodyHtml}
+    </div>
+    <div style="padding:16px 28px;border-top:1px solid #e2e8f0;background:#f8fafc">
+      <p style="color:#94a3b8;font-size:11px;margin:0">
+        Sent via <a href="${appUrl}" style="color:#7c3aed;text-decoration:none">AI Resume Coach</a>
+        ${replyTo ? ` · Reply to: <a href="mailto:${replyTo}" style="color:#7c3aed">${replyTo}</a>` : ""}
+      </p>
+    </div>
+  </div>
+</body></html>`;
+
+  await transporter.sendMail({
+    from: `"${senderName}" <${process.env.SMTP_USER}>`,
+    to,
+    replyTo: replyTo ?? process.env.SMTP_USER,
+    subject,
+    html,
+    text: body, // plain text fallback
+  });
+}

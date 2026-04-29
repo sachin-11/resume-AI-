@@ -37,6 +37,7 @@ model User {
   webhooks         WebhookConfig[]
   copilotLinkSessions CopilotLinkSession[]
   jobDescriptions  JobDescription[]
+  jobApplications  JobApplication[]
 }
 
 // ── Laptop ↔ phone (same account): share STT text for answer on phone ─
@@ -262,6 +263,34 @@ model CandidateNote {
   invite    CandidateInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
 
   @@index([inviteId])
+}
+
+// ── Job Application Agent ────────────────────────────────────────
+model JobApplication {
+  id               String   @id @default(cuid())
+  userId           String
+  resumeId         String?
+  jobTitle         String
+  company          String?
+  jobUrl           String?
+  jobDescription   String   @db.Text
+  // AI outputs
+  coverLetter      String?  @db.Text
+  interviewQuestions Json?  // GeneratedQuestion[]
+  applicationChecklist Json? // ChecklistStep[]
+  resumeGapAnalysis Json?   // GapAnalysis
+  tailoredResumeBullets Json? // TailoredBullets[]
+  followUpEmailDraft String? @db.Text
+  // Status tracking
+  status           String   @default("draft") // draft | applied | interview | offer | rejected
+  notes            String?  @db.Text
+  appliedAt        DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, status])
 }
 
 // ── Job Description & Resume Matching ───────────────────────────
