@@ -33,6 +33,11 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# Python agent service
+agent-service/venv/
+agent-service/__pycache__/
+agent-service/*.pyc
+
 # vercel
 .vercel
 
