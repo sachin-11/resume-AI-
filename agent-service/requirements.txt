@@ -1,9 +1,10 @@
+--only-binary=:all:
 fastapi==0.104.1
 uvicorn==0.24.0
-langgraph==0.2.28
-langchain==0.2.16
-langchain-openai==0.1.25
-langchain-groq==0.1.10
 python-dotenv==1.0.0
-pydantic==2.5.3
+pydantic==2.4.2
 httpx==0.25.2
+langchain-core==0.2.43
+langchain-groq==0.1.10
+langchain-openai==0.1.25
+langgraph==0.2.28
