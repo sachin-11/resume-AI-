@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { href: "/campaigns",         label: "Bulk Interviews",   icon: Users,         perm: "viewCampaigns" },
   { href: "/job-match",         label: "Job Match",         icon: Briefcase,     perm: "viewCampaigns" },
   { href: "/job-agent",         label: "Job Agent",         icon: Bot,           perm: "uploadResume" },
+  { href: "/ai-agents",         label: "AI Agents Hub",     icon: Sparkles,      perm: "uploadResume" },
   { href: "/question-bank",     label: "Question Bank",     icon: BookOpen,      perm: "createInterview" },
   { href: "/team",              label: "Team",              icon: Shield,        perm: "viewTeam" },
   { href: "/settings/webhooks", label: "Webhooks",          icon: Zap,           perm: "manageTeam" },
