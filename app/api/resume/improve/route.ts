@@ -11,9 +11,6 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 
-const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
-const AGENT_SECRET = process.env.AGENT_SECRET ?? "dev-secret-change-in-production";
-
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -33,6 +30,10 @@ export async function POST(req: NextRequest) {
   if (!resume) {
     return NextResponse.json({ error: "Resume not found" }, { status: 404 });
   }
+
+  // Read env vars at runtime (not build time)
+  const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
+  const AGENT_SECRET = process.env.AGENT_SECRET ?? "dev-secret-change-in-production";
 
   // Check if agent service is configured
   if (!process.env.AGENT_SERVICE_URL) {
