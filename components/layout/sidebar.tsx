@@ -6,7 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, FileText, Upload, MessageSquare,
   BarChart3, Settings, LogOut, Brain, ChevronRight,
-  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Headphones, Menu, X, Sun, Moon, Briefcase, Bot,
+  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Headphones, Menu, X, Sun, Moon, Briefcase, Bot, Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
   { href: "/chat",              label: "AI Assistant",      icon: Sparkles },
   { href: "/upload-resume",     label: "Upload Resume",     icon: Upload,        perm: "uploadResume" },
   { href: "/resume-report",     label: "Resume Reports",    icon: FileText,      perm: "viewResumes" },
+  { href: "/resume-improve",    label: "AI Resume Improve", icon: Wand2,         perm: "uploadResume" },
   { href: "/interview/setup",   label: "New Interview",     icon: MessageSquare, perm: "createInterview" },
   { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones,   perm: "viewInterviews" },
   { href: "/history",           label: "Interview History", icon: BarChart3,     perm: "viewInterviews" },
