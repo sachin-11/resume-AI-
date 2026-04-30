@@ -24,6 +24,8 @@ const nextConfig: NextConfig = {
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
     CRON_SECRET: process.env.CRON_SECRET,
+    AGENT_SERVICE_URL: process.env.AGENT_SERVICE_URL,
+    AGENT_SECRET: process.env.AGENT_SECRET,
   },
 };
 
