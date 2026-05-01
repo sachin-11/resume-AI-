@@ -89,8 +89,10 @@ Resume:
 ${resumeText.slice(0, 3000)}`;
 }
 
-export const QUESTION_GENERATION_SYSTEM = `You are an expert technical interviewer at a top tech company. 
-Generate realistic, challenging interview questions. Always respond with valid JSON only.`;
+export const QUESTION_GENERATION_SYSTEM = `You are a senior technical interviewer at a top-tier product company (Google, Zepto, Razorpay level).
+Your questions are sharp, specific, and designed to reveal true depth of understanding — not just surface knowledge.
+Generate realistic, challenging interview questions that separate good candidates from great ones.
+Always respond with valid JSON only.`;
 
 export function questionGenerationPrompt(params: {
   resumeText: string;
@@ -138,6 +140,15 @@ Label each with "source": "general"
 `;
 
   return `Generate exactly ${params.count} ${params.difficulty} level ${params.roundType} interview questions for a ${params.role} candidate.
+
+QUALITY STANDARDS — Every question must:
+- Be specific and actionable (not "explain X" but "how would you handle X in production?")
+- Test real-world understanding, not just definitions
+- For technical: include scenario-based problems, not just concept questions
+- For behavioral: ask for specific past examples with measurable outcomes
+- For system design: focus on trade-offs, scale, and failure scenarios
+- Avoid generic questions like "What is a closure?" — ask "When would you use a closure vs a class in Node.js and why?"
+
 ${langNote}${personaNote}${ragNote}${resumeSection}
 ${generalSection}
 
@@ -152,10 +163,10 @@ Return a single JSON array of exactly ${params.count} objects, resume-based ques
 ]
 
 Round type guidelines:
-- hr: Culture fit, motivation, career goals, past team experiences
-- technical: Coding concepts, algorithms, system concepts, tech stack
-- behavioral: STAR method, past situations, conflict resolution, leadership
-- system_design: Architecture, scalability, trade-offs, design decisions
+- hr: Culture fit, motivation, career goals, conflict resolution — ask for SPECIFIC examples
+- technical: Real-world scenarios, edge cases, performance, debugging — NOT just definitions
+- behavioral: STAR method situations — "Tell me about a time when..." with measurable outcomes
+- system_design: Architecture decisions, trade-offs, scalability, failure handling at scale
 
 IMPORTANT: Return ONLY the JSON array. No extra text.`;
 }
@@ -193,15 +204,31 @@ Interview Q&A:
 ${formatted}`;
 }
 
-export const FOLLOWUP_SYSTEM = `You are a sharp technical interviewer conducting a live interview. 
-Ask one focused follow-up question based on the candidate's answer. Be concise and direct.`;
+export const FOLLOWUP_SYSTEM = `You are a sharp, experienced technical interviewer conducting a live interview at a top product company.
+Your follow-up questions are precise, probing, and designed to reveal the depth of the candidate's understanding.
+Never accept surface-level answers. Always dig deeper.`;
 
 export function followupPrompt(question: string, answer: string, personaFollowupStyle?: string): string {
-  const style = personaFollowupStyle ?? "Ask ONE specific follow-up question to dig deeper or clarify a weak point in their answer.";
-  return `The candidate was asked: "${question}"
+  const style = personaFollowupStyle ?? `Ask ONE sharp follow-up question that:
+- Probes a specific technical detail they glossed over
+- OR challenges an assumption they made
+- OR asks them to handle an edge case / failure scenario
+- OR asks them to scale their solution 10x
+Be concise — one sentence only.`;
+
+  return `You are conducting a live technical interview.
+
+The candidate was asked: "${question}"
+
 Their answer: "${answer}"
 
 ${style}
 
-Return only the follow-up question text, nothing else.`;
+RULES:
+- Return ONLY the follow-up question text — no preamble, no "Great answer!", no explanation
+- Make it specific to what they actually said — not generic
+- If their answer was weak/vague, probe that specific weakness
+- If their answer was good, push them to the next level of depth
+
+Return only the follow-up question.`;
 }

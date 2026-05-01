@@ -122,10 +122,33 @@ export default function InterviewSessionPage() {
     if (warmup) {
       setWarmup(false);
       const q0 = session.questions[0];
+
+      // AI acknowledges candidate's warmup response naturally
+      const warmupReplies = [
+        "That's great to hear! Let's dive right in.",
+        "Wonderful! I'm glad you're ready. Let's get started.",
+        "Perfect! I appreciate your enthusiasm. Here we go.",
+        "Excellent! Let's make the most of our time together.",
+        "Sounds good! I'm looking forward to our conversation.",
+      ];
+
+      // Detect sentiment in candidate's warmup reply
+      const positiveWords = /good|great|fine|ready|excited|awesome|perfect|well|yes|sure|absolutely|let'?s go/i;
+      const nervousWords = /nervous|anxious|scared|worried|bit|little|okay|ok|alright/i;
+
+      let warmupAck = "";
+      if (nervousWords.test(text)) {
+        warmupAck = "It's completely normal to feel a little nervous — take a deep breath, you've got this! Let's start with the first question.";
+      } else if (positiveWords.test(text)) {
+        warmupAck = warmupReplies[Math.floor(Math.random() * warmupReplies.length)];
+      } else {
+        warmupAck = "Great! Let's get started with the interview.";
+      }
+
       setTimeout(() => {
         setMessages((p) => [...p, {
           id: "warmup-bridge", role: "assistant",
-          content: "Great! Let's get started with the interview. Here's your first question:",
+          content: warmupAck,
         }]);
         setTimeout(() => {
           setMessages((p) => [...p, { id: `q-${q0.id}`, role: "assistant", content: q0.text, source: q0.source }]);
@@ -148,6 +171,33 @@ export default function InterviewSessionPage() {
       setDone(true);
       // Auto-end after AI finishes saying goodbye
       setTimeout(() => handleEndInterview(), ttsEnabled ? 4000 : 1500);
+      return;
+    }
+
+    // ── Next question intent detection ──
+    const nextPhrases = /\b(next|next question|move on|skip|continue|go ahead|proceed|next one|move forward)\b/i;
+    if (nextPhrases.test(text.trim()) && text.trim().split(" ").length <= 5) {
+      // Short "next question" command — skip to next without saving answer
+      const next = currentIndex + 1;
+      if (next < session.questions.length) {
+        const nq = session.questions[next];
+        setMessages((p) => [...p, {
+          id: `skip-ack-${Date.now()}`, role: "assistant",
+          content: "Sure! Moving on to the next question.",
+        }]);
+        setTimeout(() => {
+          setMessages((p) => [...p, { id: `q-${nq.id}`, role: "assistant", content: nq.text, source: nq.source }]);
+          setCurrentIndex(next);
+          setSubmitting(false);
+        }, 400);
+      } else {
+        setDone(true);
+        setMessages((p) => [...p, {
+          id: "complete", role: "assistant",
+          content: "That was the last question! Great job completing the interview. Click 'Get Scorecard' to see your detailed performance report.",
+        }]);
+        setSubmitting(false);
+      }
       return;
     }
 
@@ -205,10 +255,23 @@ export default function InterviewSessionPage() {
         const candidateName: string = d.session.user?.name ?? "";
         const firstName = candidateName.split(" ")[0] ?? "";
 
-        // Warmup greeting — no question yet
+        // Warmup greeting — no question yet — persona-aware
+        const personaId = d.session.persona ?? "friendly";
+        const greetings: Record<string, string> = {
+          friendly:      `Hello${firstName ? `, ${firstName}` : ""}! 😊 I'm your AI interviewer today. I'm really looking forward to our conversation! How are you feeling? Ready to begin?`,
+          strict:        `Hello${firstName ? `, ${firstName}` : ""}. I'm your interviewer. We'll be covering technical topics in depth today. Are you prepared to begin?`,
+          conversational:`Hey${firstName ? ` ${firstName}` : ""}! Great to meet you. Think of this as a casual chat between engineers. How are you doing today?`,
+          react_expert:  `Hello${firstName ? `, ${firstName}` : ""}! ⚛️ I'm a React specialist and we'll be going deep on frontend concepts today. How are you feeling?`,
+          nodejs_expert: `Hello${firstName ? `, ${firstName}` : ""}! 🟢 I specialize in Node.js and backend systems. Ready to dive into some interesting backend challenges?`,
+          devops_expert: `Hello${firstName ? `, ${firstName}` : ""}! 🚀 I'm your DevOps interviewer. We'll cover infrastructure, CI/CD, and cloud topics. Are you ready?`,
+          google_style:  `Welcome${firstName ? `, ${firstName}` : ""}. 🔍 This will be a Google-style interview covering algorithms and system design. Think out loud — I want to understand your reasoning. Ready?`,
+          startup_style: `Hey${firstName ? ` ${firstName}` : ""}! ⚡ We move fast here. I care about what you've actually built. How are you doing today?`,
+          amazon_style:  `Hello${firstName ? `, ${firstName}` : ""}. 📦 We'll be using Amazon's Leadership Principles format today — STAR method for behavioral questions. Ready to get started?`,
+        };
+        const greeting = greetings[personaId] ?? greetings.friendly;
         const msgs: ChatMessage[] = [{
           id: "intro", role: "assistant",
-          content: `Hello${firstName ? `, ${firstName}` : ""}! I'm your AI interviewer today. How are you feeling? Are you ready to begin?`,
+          content: greeting,
         }];
 
         const qs = d.session.questions as Array<Question & { answers: Array<{ text: string }> }>;
