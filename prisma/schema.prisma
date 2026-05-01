@@ -114,6 +114,11 @@ model InterviewSession {
   lookingAwayCount    Int        @default(0)
   noiseCount          Int        @default(0)
   copyPasteCount      Int        @default(0)
+  adaptiveCheckpointDone Boolean @default(false)
+  adaptiveAdjustment  String?
+  adaptiveNote        String?
+  panelInterview      Boolean    @default(false)
+  pairProgramming     Boolean    @default(false)
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
   user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -132,6 +137,9 @@ model Question {
   text        String
   type        String
   orderIndex  Int
+  panelAgent  String?          // technical | hr | domain (3-AI panel)
+  starterCode String?          @db.Text
+  codeLanguage String?
   createdAt   DateTime         @default(now())
   session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   answers     Answer[]
@@ -141,6 +149,8 @@ model Answer {
   id         String   @id @default(cuid())
   questionId String
   text       String
+  qualityScore     Int?
+  confidenceScore  Int?
   createdAt  DateTime @default(now())
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 }

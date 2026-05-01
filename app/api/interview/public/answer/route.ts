@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { callGroq } from "@/lib/groq";
-import { FOLLOWUP_SYSTEM, followupPrompt } from "@/lib/prompts";
+import { analyzeAnswerAndMaybeFollowup } from "@/lib/interview-answer-analysis";
+import { runAdaptiveCheckpoint } from "@/lib/interview-adaptive-checkpoint";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
 
 // Public endpoint — no auth required (for candidate invite sessions)
@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
 
     const session = await db.interviewSession.findUnique({
       where: { id: sessionId },
+      select: { id: true, userId: true },
     });
     if (!session) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
@@ -30,38 +31,55 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Question not found" }, { status: 404 });
     }
 
-    await db.answer.create({
-      data: { questionId, text: answerText },
+    const hasLlm = Boolean(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY);
+
+    const [createdAnswer, { confidence, followupText }] = await Promise.all([
+      db.answer.create({
+        data: { questionId, text: answerText },
+      }),
+      analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm),
+    ]);
+
+    await db.answer.update({
+      where: { id: createdAnswer.id },
+      data: {
+        qualityScore: confidence.qualityScore,
+        confidenceScore: confidence.confidenceScore,
+      },
     });
 
-    // Generate follow-up
     let followupQuestion = null;
-    if (process.env.GROQ_API_KEY) {
+    if (followupText) {
       try {
-        const followupText = await callGroq(
-          FOLLOWUP_SYSTEM,
-          followupPrompt(question.text, answerText)
-        );
-        if (followupText?.trim()) {
-          const maxOrder = await db.question.aggregate({
-            where: { sessionId },
-            _max: { orderIndex: true },
-          });
-          followupQuestion = await db.question.create({
-            data: {
-              sessionId,
-              text: followupText.trim(),
-              type: "followup",
-              orderIndex: (maxOrder._max.orderIndex ?? 0) + 1,
-            },
-          });
-        }
+        const maxOrder = await db.question.aggregate({
+          where: { sessionId },
+          _max: { orderIndex: true },
+        });
+        followupQuestion = await db.question.create({
+          data: {
+            sessionId,
+            text: followupText,
+            type: "followup",
+            orderIndex: (maxOrder._max.orderIndex ?? 0) + 1,
+          },
+        });
       } catch {
         // follow-up is optional
       }
     }
 
-    return NextResponse.json({ success: true, followupQuestion });
+    let adaptive: Awaited<ReturnType<typeof runAdaptiveCheckpoint>> = { applied: false };
+    try {
+      adaptive = await runAdaptiveCheckpoint({
+        sessionId,
+        userId: session.userId,
+        hasLlm,
+      });
+    } catch (err) {
+      console.error("[PUBLIC_ADAPTIVE_CHECKPOINT]", err);
+    }
+
+    return NextResponse.json({ success: true, followupQuestion, confidence, adaptive });
   } catch (err) {
     console.error("[PUBLIC_ANSWER]", err);
     return NextResponse.json({ error: "Failed to save answer" }, { status: 500 });

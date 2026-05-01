@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { callGroq } from "@/lib/groq";
-import { FOLLOWUP_SYSTEM, followupPrompt } from "@/lib/prompts";
+import { analyzeAnswerAndMaybeFollowup } from "@/lib/interview-answer-analysis";
+import { runAdaptiveCheckpoint } from "@/lib/interview-adaptive-checkpoint";
 
 export async function POST(req: NextRequest) {
   try {
@@ -27,17 +27,21 @@ export async function POST(req: NextRequest) {
     if (!interviewSession) return NextResponse.json({ error: "Session not found" }, { status: 404 });
     if (!question) return NextResponse.json({ error: "Question not found" }, { status: 404 });
 
-    // Save answer + generate followup in parallel
-    const [, followupText] = await Promise.all([
+    const hasLlm = Boolean(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY);
+
+    const [createdAnswer, { confidence, followupText }] = await Promise.all([
       db.answer.create({ data: { questionId, text: answerText } }),
-      process.env.GROQ_API_KEY
-        ? callGroq(FOLLOWUP_SYSTEM, followupPrompt(question.text, answerText))
-            .then((t) => t.trim())
-            .catch(() => null)
-        : Promise.resolve(null),
+      analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm),
     ]);
 
-    // Save follow-up as a new question if generated
+    await db.answer.update({
+      where: { id: createdAnswer.id },
+      data: {
+        qualityScore: confidence.qualityScore,
+        confidenceScore: confidence.confidenceScore,
+      },
+    });
+
     let followupQuestion = null;
     if (followupText) {
       const maxOrder = await db.question.aggregate({
@@ -54,7 +58,18 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ success: true, followupQuestion });
+    let adaptive: Awaited<ReturnType<typeof runAdaptiveCheckpoint>> = { applied: false };
+    try {
+      adaptive = await runAdaptiveCheckpoint({
+        sessionId,
+        userId: session.user.id,
+        hasLlm,
+      });
+    } catch (err) {
+      console.error("[ADAPTIVE_CHECKPOINT]", err);
+    }
+
+    return NextResponse.json({ success: true, followupQuestion, confidence, adaptive });
   } catch (err) {
     console.error("[INTERVIEW_ANSWER]", err);
     return NextResponse.json({ error: "Failed to save answer" }, { status: 500 });

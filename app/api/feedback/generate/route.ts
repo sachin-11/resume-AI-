@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { sessionId } = await req.json();
+    const { sessionId, hintPenalty = 0 } = await req.json();
 
     const interviewSession = await db.interviewSession.findFirst({
       where: { id: sessionId, userId: session.user.id },
@@ -82,22 +82,32 @@ export async function POST(req: NextRequest) {
         ? `\nNOTE: ${skippedCount} out of ${qa.length} questions were skipped or not answered properly. Factor this into the scores — skipped questions should significantly lower the technical and overall scores.\n`
         : "";
 
-      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(realAnswers, "en", ragContext + skippedNote));
+      const hintNote = hintPenalty > 0
+        ? `\nNOTE: The candidate used hints during the interview. Apply a ${hintPenalty} point penalty to the overall score.\n`
+        : "";
+
+      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(realAnswers, "en", ragContext + skippedNote + hintNote));
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 
+    // Apply hint penalty to final scores
+    const penaltyApplied = Math.min(hintPenalty, 30); // max 30 point penalty
     const report = await db.feedbackReport.create({
       data: {
         sessionId,
-        overallScore: feedback.overallScore,
-        technicalScore: feedback.technicalScore,
+        overallScore: Math.max(0, feedback.overallScore - penaltyApplied),
+        technicalScore: Math.max(0, feedback.technicalScore - Math.round(penaltyApplied * 0.7)),
         communicationScore: feedback.communicationScore,
         confidenceScore: feedback.confidenceScore,
         strengths: feedback.strengths,
-        weakAreas: feedback.weakAreas,
+        weakAreas: hintPenalty > 0
+          ? [...feedback.weakAreas, `Used ${Math.round(hintPenalty / 5)} hint(s) during interview (−${penaltyApplied} pts)`]
+          : feedback.weakAreas,
         betterAnswers: feedback.betterAnswers as object[],
         improvementRoadmap: feedback.improvementRoadmap,
-        summary: feedback.summary,
+        summary: hintPenalty > 0
+          ? `${feedback.summary} Note: ${penaltyApplied} points deducted for using hints.`
+          : feedback.summary,
       },
     });
 

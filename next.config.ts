@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["pdf-parse", "mammoth"],
-  turbopack: {},
+  // Dev: use `npm run dev` (--webpack). Monaco workers + CDN config in lib/monaco-env.ts.
   devIndicators: false,
   env: {
     NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET,

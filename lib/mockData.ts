@@ -106,3 +106,42 @@ export const MOCK_QUESTIONS: Record<string, GeneratedQuestion[]> = {
     { text: "How would you architect a microservices-based e-commerce platform?", type: "main", orderIndex: 5 },
   ],
 };
+
+/** Offline / no-LLM: interleave Technical → HR → Domain with optional pair stubs on technical slots. */
+export function buildMockPanelQuestions(
+  count: number,
+  opts: { pairProgramming: boolean }
+): GeneratedQuestion[] {
+  const tech = MOCK_QUESTIONS.technical ?? [];
+  const hr = MOCK_QUESTIONS.hr ?? [];
+  const beh = MOCK_QUESTIONS.behavioral ?? [];
+  const domain = MOCK_QUESTIONS.system_design?.length ? MOCK_QUESTIONS.system_design : tech;
+  const cycle: Array<{ agent: "technical" | "hr" | "domain"; pool: GeneratedQuestion[] }> = [
+    { agent: "technical", pool: tech },
+    { agent: "hr", pool: hr.length ? hr : beh },
+    { agent: "domain", pool: domain },
+  ];
+  const out: GeneratedQuestion[] = [];
+  for (let i = 0; i < count; i++) {
+    const { agent, pool } = cycle[i % 3];
+    const base = pool[i % Math.max(pool.length, 1)] ?? tech[0];
+    const starter =
+      opts.pairProgramming && agent === "technical"
+        ? `// Pair exercise — complete the function body
+function processData(items) {
+  // TODO: implement (handle empty input)
+  return null;
+}`
+        : undefined;
+    out.push({
+      ...base,
+      text: base.text,
+      type: "main",
+      orderIndex: i + 1,
+      panelAgent: agent,
+      starterCode: starter,
+      codeLanguage: starter ? "javascript" : undefined,
+    });
+  }
+  return out;
+}

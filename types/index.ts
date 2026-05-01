@@ -38,6 +38,12 @@ export interface GeneratedQuestion {
   type: "main" | "followup";
   hint?: string;
   orderIndex: number;
+  source?: string;
+  /** 3-agent panel: who is asking */
+  panelAgent?: "technical" | "hr" | "domain";
+  /** Pair programming: incomplete starter the candidate must finish */
+  starterCode?: string;
+  codeLanguage?: string;
 }
 
 export interface FeedbackReport {

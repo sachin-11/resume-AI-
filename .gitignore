@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# Monaco editor assets (copied from node_modules by scripts/copy-monaco.cjs)
+/public/monaco/
+
 # production
 /build
 

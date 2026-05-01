@@ -37,6 +37,8 @@ export default function InterviewSetupPage() {
     resumeId: "", role: "", difficulty: "intermediate",
     roundType: "technical", questionCount: 5,
     persona: DEFAULT_PERSONA_ID,
+    panelInterview: false,
+    pairProgramming: false,
   });
 
   useEffect(() => {
@@ -228,6 +230,39 @@ export default function InterviewSetupPage() {
                 </div>
               );
             })()}
+          </div>
+
+          {/* Panel + pair programming */}
+          <div className="rounded-xl border border-border bg-secondary/20 p-4 space-y-3">
+            <Label className="text-sm">Session modes</Label>
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                className="mt-1 rounded border-border"
+                checked={form.panelInterview}
+                onChange={(e) => setForm((f) => ({ ...f, panelInterview: e.target.checked }))}
+              />
+              <div>
+                <p className="text-sm font-medium">3-AI panel interview</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Technical, HR, and Domain agents ask questions in rotation — all visible in one chat with colored labels.
+                </p>
+              </div>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                className="mt-1 rounded border-border"
+                checked={form.pairProgramming}
+                onChange={(e) => setForm((f) => ({ ...f, pairProgramming: e.target.checked }))}
+              />
+              <div>
+                <p className="text-sm font-medium">Pair programming</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Incomplete code stubs + live AI hints while you type (technical round or technical slots in panel mode).
+                </p>
+              </div>
+            </label>
           </div>
 
           {/* Difficulty */}

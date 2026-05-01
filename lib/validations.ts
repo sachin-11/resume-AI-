@@ -26,6 +26,8 @@ export const interviewSetupSchema = z.object({
   questionCount: z.number().min(3).max(15).default(5),
   customQuestionIds: z.array(z.string()).optional(),
   persona: z.string().default("friendly"),
+  panelInterview: z.boolean().optional().default(false),
+  pairProgramming: z.boolean().optional().default(false),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

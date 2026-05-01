@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "postinstall": "node scripts/copy-monaco.cjs",
+    "predev": "node scripts/copy-monaco.cjs",
+    "prebuild": "node scripts/copy-monaco.cjs",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -12,6 +15,7 @@
     "@aws-sdk/client-s3": "^3.1030.0",
     "@aws-sdk/client-sns": "^3.1031.0",
     "@aws-sdk/s3-request-presigner": "^3.1030.0",
+    "@monaco-editor/react": "^4.7.0",
     "@pinecone-database/pinecone": "^7.2.0",
     "@prisma/client": "^5.22.0",
     "@radix-ui/react-avatar": "^1.1.11",
@@ -38,6 +42,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^1.8.0",
     "mammoth": "^1.12.0",
+    "monaco-editor": "0.55.1",
     "next": "16.2.3",
     "next-auth": "^4.24.13",
     "nodemailer": "^7.0.13",

@@ -1,34 +1,69 @@
 "use client";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Send, Loader2, Bot, User, Flag, CheckCircle,
   Volume2, VolumeX, Mic, MicOff, AudioLines, StopCircle, UserRound,
-  Camera, CameraOff, VideoOff, SkipForward,
+  Camera, CameraOff, VideoOff, SkipForward, Code2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { getDifficultyColor, getRoundTypeLabel } from "@/lib/utils";
+import { getDifficultyColor, getRoundTypeLabel, getScoreColor } from "@/lib/utils";
 import { useTTS, useSTT } from "@/hooks/use-speech";
 import { getPersona } from "@/lib/personas";
 import { useCamera } from "@/hooks/use-camera";
+import { CodeEditor } from "@/components/interview/code-editor";
+import { PANEL_AGENT_META, parsePanelAgent, type PanelAgentId } from "@/lib/panel";
 
 interface Question {
   id: string;
   text: string;
   type: string;
   orderIndex: number;
-  source?: "resume" | "general"; // from AI generation
+  source?: "resume" | "general";
+  panelAgent?: string | null;
+  starterCode?: string | null;
+  codeLanguage?: string | null;
 }
 interface SessionData {
   id: string; title: string; role: string;
   difficulty: string; roundType: string; status: string;
   language: string;
   questions: Question[];
+  panelInterview?: boolean;
+  pairProgramming?: boolean;
 }
-interface ChatMessage { id: string; role: "assistant" | "user"; content: string; source?: "resume" | "general"; }
+interface ChatMessage {
+  id: string;
+  role: "assistant" | "user";
+  content: string;
+  source?: "resume" | "general";
+  panelAgent?: PanelAgentId;
+}
+
+function interviewSignalLabel(signal: string): string {
+  const labels: Record<string, string> = {
+    follow_up: "Follow-up needed",
+    next_level: "Strong — level up",
+    proceed: "On track",
+    easier: "Gentler cue",
+    clarify: "Re-align",
+  };
+  return labels[signal] ?? signal;
+}
+
+function qMessage(q: Question, idSuffix = ""): ChatMessage {
+  const pa = parsePanelAgent(q.panelAgent);
+  return {
+    id: `q-${q.id}${idSuffix}`,
+    role: "assistant",
+    content: q.text,
+    source: q.source,
+    ...(pa ? { panelAgent: pa } : {}),
+  };
+}
 
 export default function InterviewSessionPage() {
   const { id } = useParams<{ id: string }>();
@@ -45,6 +80,48 @@ export default function InterviewSessionPage() {
   const [warmup, setWarmup] = useState(true);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Code editor state
+  const [showCodeEditor, setShowCodeEditor] = useState(false);
+  const [codeScores, setCodeScores] = useState<Record<string, number>>({}); // questionId → score
+
+  /** Webcam presence (OpenAI vision — optional) */
+  const [videoInsight, setVideoInsight] = useState<{
+    eyeContactScore: number;
+    bodyLanguageScore: number;
+    confidenceSummary: string;
+    signals: string[];
+    coachingTip: string;
+  } | null>(null);
+  const [videoInsightLoading, setVideoInsightLoading] = useState(false);
+  const [videoInsightNote, setVideoInsightNote] = useState<string | null>(null);
+
+  // Real-time confidence tracking
+  const [confidenceHistory, setConfidenceHistory] = useState<Array<{
+    questionIdx: number;
+    confidenceScore: number;
+    qualityScore: number;
+    tone: string;
+    signal: string;
+    aiAction: string;
+  }>>([]);
+  const [latestConfidence, setLatestConfidence] = useState<{
+    confidenceScore: number;
+    qualityScore: number;
+    tone: string;
+    signal: string;
+    aiAction: string;
+    nextQuestionLevel?: string;
+    indicators?: string[];
+  } | null>(null);
+
+  // Progressive hint system
+  const [hintLevel, setHintLevel] = useState(0);
+  const [hintText, setHintText] = useState("");
+  const [hintEncouragement, setHintEncouragement] = useState("");
+  const [hintLoading, setHintLoading] = useState(false);
+  const [totalPenalty, setTotalPenalty] = useState(0);
+
   const doneRef = useRef(false);
   const listeningRef = useRef(false);
   const speakingRef = useRef(false);
@@ -66,22 +143,48 @@ export default function InterviewSessionPage() {
   const submitRef = useRef<((text: string) => void) | null>(null);
 
   // ── TTS ──────────────────────────────────────────────────────
-  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender } = useTTS("male", session?.language?.split("-")[0] ?? "en");
+  const { speak, stop: stopSpeaking, speaking, enabled: ttsEnabled, setEnabled: setTtsEnabled, voiceGender, setVoiceGender, voicesReady } = useTTS("male", session?.language?.split("-")[0] ?? "en");
   const lastSpokenId = useRef("");
+  const pendingGreetingRef = useRef<string | null>(null);
 
   // ── Camera ───────────────────────────────────────────────────
-  const { status: camStatus, enabled: camEnabled, toggleCamera, attachVideo } = useCamera();
+  const { status: camStatus, enabled: camEnabled, toggleCamera, attachVideo, capturePhoto } = useCamera();
 
+  // Speak new AI messages — with retry for greeting (voices may not be ready)
   useEffect(() => {
     if (!ttsEnabled) return;
     const last = messages[messages.length - 1];
-    if (last?.role === "assistant" && last.id !== lastSpokenId.current && last.id !== "feedback-error") {
-      lastSpokenId.current = last.id;
-      // Delay ensures voices are loaded and browser allows speech
+    if (!last || last.role !== "assistant") return;
+    if (last.id === lastSpokenId.current || last.id === "feedback-error") return;
+    lastSpokenId.current = last.id;
+
+    if (last.id === "intro") {
+      // Greeting — voices may not be loaded yet, retry with delays
+      pendingGreetingRef.current = last.content;
+      [800, 2000, 4000].forEach((delay) => {
+        setTimeout(() => {
+          if (pendingGreetingRef.current) speak(pendingGreetingRef.current);
+        }, delay);
+      });
+    } else {
       const t = setTimeout(() => speak(last.content), 300);
       return () => clearTimeout(t);
     }
   }, [messages, ttsEnabled, speak]);
+
+  // Once voices are ready, speak pending greeting immediately
+  useEffect(() => {
+    if (voicesReady && ttsEnabled && pendingGreetingRef.current) {
+      const content = pendingGreetingRef.current;
+      pendingGreetingRef.current = null;
+      setTimeout(() => speak(content), 200);
+    }
+  }, [voicesReady, ttsEnabled, speak]);
+
+  // Clear pending greeting once speaking starts
+  useEffect(() => {
+    if (speaking) pendingGreetingRef.current = null;
+  }, [speaking]);
 
   // ── STT ──────────────────────────────────────────────────────
   const handleInterim = useCallback((text: string) => setAnswer(text), []);
@@ -107,6 +210,22 @@ export default function InterviewSessionPage() {
   listeningRef.current = listening;
   speakingRef.current = speaking;
   submittingRef.current = submitting;
+
+  /** Lightweight live hint while the candidate is speaking or typing (updates as text changes). */
+  const liveSpeakingHint = useMemo(() => {
+    const t = answer.trim();
+    if (!t || warmup || done || t.length < 8) return null;
+    let score = 82;
+    const lower = t.toLowerCase();
+    const fillers = (lower.match(/\b(um|uh|uhh|like|you know|i mean|sort of|kind of)\b/g) ?? []).length;
+    const hedges = (lower.match(/\b(maybe|i think|i guess|i don'?t know|not sure|probably|might|could be|perhaps)\b/g) ?? []).length;
+    score -= fillers * 7;
+    score -= hedges * 5;
+    const words = t.split(/\s+/).filter(Boolean).length;
+    if (words < 5) score -= 14;
+    if (/\.{3,}|…/.test(t)) score -= 8;
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }, [answer, warmup, done]);
 
   // ── Core submit logic ────────────────────────────────────────
   const doSubmit = useCallback(async (text: string) => {
@@ -150,11 +269,23 @@ export default function InterviewSessionPage() {
           id: "warmup-bridge", role: "assistant",
           content: warmupAck,
         }]);
+        // Wait long enough for TTS to finish the warmup ack before pushing Q1
+        // Estimate ~70ms per character for speech, minimum 2.5s, max 5s
+        const ackSpeakMs = ttsEnabled
+          ? Math.min(5000, Math.max(2500, warmupAck.length * 70))
+          : 800;
         setTimeout(() => {
-          setMessages((p) => [...p, { id: `q-${q0.id}`, role: "assistant", content: q0.text, source: q0.source }]);
+          const panelIntro: ChatMessage[] = session.panelInterview
+            ? [
+                { id: `panel-i1-${Date.now()}`, role: "assistant", content: "Hi — I'm your Technical AI. I'll ask coding and engineering questions.", panelAgent: "technical" },
+                { id: `panel-i2-${Date.now()}`, role: "assistant", content: "Hello — I'm your HR AI. I'll cover motivation and behavioral topics.", panelAgent: "hr" },
+                { id: `panel-i3-${Date.now()}`, role: "assistant", content: `Hey — I'm your Domain AI for ${session.role}. Expect deep, role-specific scenarios.`, panelAgent: "domain" },
+              ]
+            : [];
+          setMessages((p) => [...p, ...panelIntro, qMessage(q0)]);
           setCurrentIndex(0);
           setSubmitting(false);
-        }, 600);
+        }, ackSpeakMs);
       }, 400);
       return;
     }
@@ -169,8 +300,46 @@ export default function InterviewSessionPage() {
       setMessages((p) => [...p, { id: "goodbye", role: "assistant", content: goodbye }]);
       setSubmitting(false);
       setDone(true);
-      // Auto-end after AI finishes saying goodbye
-      setTimeout(() => handleEndInterview(), ttsEnabled ? 4000 : 1500);
+      // Wait for AI to finish speaking goodbye before navigating
+      // speakingRef tracks real-time speaking state
+      if (ttsEnabled) {
+        // Poll speaking state — navigate only after AI finishes
+        const waitForSpeechEnd = () => {
+          const checkInterval = setInterval(() => {
+            if (!speakingRef.current) {
+              clearInterval(checkInterval);
+              // Small buffer after speech ends
+              setTimeout(() => handleEndInterview(), 800);
+            }
+          }, 300);
+          // Safety timeout — max 30 seconds wait
+          setTimeout(() => {
+            clearInterval(checkInterval);
+            handleEndInterview();
+          }, 30_000);
+        };
+        // Give TTS 1 second to start speaking, then watch for it to stop
+        setTimeout(waitForSpeechEnd, 1000);
+      } else {
+        setTimeout(() => handleEndInterview(), 1500);
+      }
+      return;
+    }
+
+    // ── Repeat question intent detection ──
+    const repeatPhrases = /\b(repeat|say that again|can you repeat|please repeat|again|come again|pardon|didn'?t (hear|catch|get)|what was the question|what'?s the question|one more time|say again)\b/i;
+    if (repeatPhrases.test(text.trim()) && text.trim().split(" ").length <= 10) {
+      const repeatAck = "Of course! Here's the question again.";
+      setMessages((p) => [...p, {
+        id: `repeat-ack-${Date.now()}`, role: "assistant",
+        content: repeatAck,
+      }]);
+      // Wait for ack to be spoken, then re-push the current question
+      const ackDelay = ttsEnabled ? Math.min(3000, Math.max(1500, repeatAck.length * 70)) : 400;
+        setTimeout(() => {
+          setMessages((p) => [...p, qMessage(currentQ, `-${Date.now()}`)]);
+          setSubmitting(false);
+        }, ackDelay);
       return;
     }
 
@@ -186,7 +355,7 @@ export default function InterviewSessionPage() {
           content: "Sure! Moving on to the next question.",
         }]);
         setTimeout(() => {
-          setMessages((p) => [...p, { id: `q-${nq.id}`, role: "assistant", content: nq.text, source: nq.source }]);
+          setMessages((p) => [...p, qMessage(nq)]);
           setCurrentIndex(next);
           setSubmitting(false);
         }, 400);
@@ -209,13 +378,55 @@ export default function InterviewSessionPage() {
     const data = await res.json();
     const next = currentIndex + 1;
 
+    // Update real-time confidence
+    if (data.confidence) {
+      const c = data.confidence;
+      setLatestConfidence(c);
+      setConfidenceHistory((prev) => [...prev, {
+        questionIdx: currentIndex,
+        confidenceScore: c.confidenceScore,
+        qualityScore: c.qualityScore,
+        tone: c.tone,
+        signal: c.signal,
+        aiAction: c.aiAction ?? "",
+      }]);
+    }
+
+    const adaptive = data.adaptive as {
+      applied?: boolean;
+      message?: string;
+      newDifficulty?: string;
+      updatedQuestions?: Array<{ id: string; text: string; orderIndex: number; type: string }>;
+    } | undefined;
+
+    let qs = session.questions;
+    if (adaptive?.updatedQuestions?.length) {
+      const map = new Map(adaptive.updatedQuestions.map((u) => [u.id, u.text]));
+      qs = qs.map((q) => (map.has(q.id) ? { ...q, text: map.get(q.id)! } : q));
+    }
     if (data.followupQuestion) {
-      setSession((p) => p ? { ...p, questions: [...p.questions, data.followupQuestion] } : p);
+      qs = [...qs, data.followupQuestion];
+    }
+    const sessionDifficulty = adaptive?.newDifficulty ?? session.difficulty;
+    if (adaptive?.updatedQuestions?.length || data.followupQuestion || adaptive?.newDifficulty) {
+      setSession((p) => (p ? { ...p, questions: qs, difficulty: sessionDifficulty } : p));
+    }
+
+    if (adaptive?.applied && adaptive.message) {
+      const coach = adaptive.message;
+      setMessages((p) => [...p, {
+        id: `adaptive-${Date.now()}`,
+        role: "assistant",
+        content: coach,
+      }]);
+    }
+
+    if (data.followupQuestion) {
       setMessages((p) => [...p, { id: `q-${data.followupQuestion.id}`, role: "assistant", content: data.followupQuestion.text, source: undefined }]);
       setCurrentIndex(next);
-    } else if (next < session.questions.length) {
-      const nq = session.questions[next];
-      setMessages((p) => [...p, { id: `q-${nq.id}`, role: "assistant", content: nq.text, source: nq.source }]);
+    } else if (next < qs.length) {
+      const nq = qs[next];
+      setMessages((p) => [...p, qMessage(nq)]);
       setCurrentIndex(next);
     } else {
       setDone(true);
@@ -269,16 +480,19 @@ export default function InterviewSessionPage() {
           amazon_style:  `Hello${firstName ? `, ${firstName}` : ""}. 📦 We'll be using Amazon's Leadership Principles format today — STAR method for behavioral questions. Ready to get started?`,
         };
         const greeting = greetings[personaId] ?? greetings.friendly;
+        const introText = d.session.panelInterview
+          ? `${greeting}\n\nYou'll see three AI interviewers in this chat — Technical, HR, and Domain — taking turns.`
+          : greeting;
         const msgs: ChatMessage[] = [{
           id: "intro", role: "assistant",
-          content: greeting,
+          content: introText,
         }];
 
         const qs = d.session.questions as Array<Question & { answers: Array<{ text: string }> }>;
         let lastAnswered = -1;
         qs.forEach((q, i) => {
           if (q.answers?.length > 0) {
-            msgs.push({ id: `q-${q.id}`, role: "assistant", content: q.text, source: q.source });
+            msgs.push(qMessage(q));
             msgs.push({ id: `a-${q.id}`, role: "user", content: q.answers[0].text });
             lastAnswered = i;
           }
@@ -289,7 +503,7 @@ export default function InterviewSessionPage() {
           setWarmup(false);
           const next = lastAnswered + 1;
           if (next < s.questions.length) {
-            msgs.push({ id: `q-${s.questions[next].id}`, role: "assistant", content: s.questions[next].text, source: s.questions[next].source });
+            msgs.push(qMessage(s.questions[next]));
             setCurrentIndex(next);
           } else {
             setDone(true);
@@ -301,6 +515,42 @@ export default function InterviewSessionPage() {
       })
       .finally(() => setLoading(false));
   }, [id]);
+
+  // Periodically analyze webcam frame for on-camera presence (needs OPENAI_API_KEY)
+  useEffect(() => {
+    if (!camEnabled || done || loading || warmup) return;
+    const tick = async () => {
+      const dataUrl = capturePhoto();
+      if (!dataUrl) return;
+      setVideoInsightLoading(true);
+      try {
+        const res = await fetch("/api/interview/video-analysis", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageDataUrl: dataUrl, sessionId: id }),
+        });
+        const data = await res.json();
+        if (data.skipped) {
+          setVideoInsightNote(data.message ?? null);
+          return;
+        }
+        if (data.analysis) {
+          setVideoInsight(data.analysis);
+          setVideoInsightNote(null);
+        }
+      } catch {
+        /* noop */
+      } finally {
+        setVideoInsightLoading(false);
+      }
+    };
+    const sooner = window.setTimeout(tick, 9000);
+    const interval = window.setInterval(tick, 26000);
+    return () => {
+      clearTimeout(sooner);
+      clearInterval(interval);
+    };
+  }, [camEnabled, done, loading, warmup, capturePhoto, id]);
 
   // Auto-start mic when session loads (if TTS is on, wait for first speak; if off, start immediately)
   useEffect(() => {
@@ -345,7 +595,7 @@ export default function InterviewSessionPage() {
     if (next < session.questions.length) {
       setMessages((p) => [...p,
         { id: `skip-${currentQ.id}`, role: "user", content: "⏭ Skipped" },
-        { id: `q-${session.questions[next].id}`, role: "assistant", content: session.questions[next].text, source: session.questions[next].source },
+        qMessage(session.questions[next]),
       ]);
       setCurrentIndex(next);
     } else {
@@ -358,9 +608,53 @@ export default function InterviewSessionPage() {
     setSubmitting(false);
   }, [session, currentIndex, id, warmup, done, submitting, stopMic, stopSpeaking]);
 
+  // ── Request Hint ─────────────────────────────────────────────
+  async function requestHint() {
+    if (!session || warmup || done || hintLevel >= 3) return;
+    setHintLoading(true);
+    const currentQ = session.questions[currentIndex];
+    const nextLevel = hintLevel + 1;
+
+    const res = await fetch("/api/interview/hint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        questionText: currentQ.text,
+        hintLevel: nextLevel,
+        questionId: currentQ.id,
+        sessionId: id,
+      }),
+    });
+    const data = await res.json();
+    setHintLoading(false);
+
+    if (res.ok) {
+      setHintLevel(nextLevel);
+      setHintText(data.hint);
+      setHintEncouragement(data.encouragement ?? "");
+      setTotalPenalty((p) => p + (data.scorePenalty ?? 0));
+      // Show hint as AI message
+      setMessages((p) => [...p, {
+        id: `hint-${nextLevel}-${Date.now()}`,
+        role: "assistant",
+        content: `💡 Hint ${nextLevel}/3: ${data.hint}\n\n${data.encouragement}`,
+      }]);
+    }
+  }
+
+  // Reset hint when moving to next question
+  useEffect(() => {
+    setHintLevel(0);
+    setHintText("");
+    setHintEncouragement("");
+  }, [currentIndex]);
+
   // ── End interview ────────────────────────────────────────────
   async function handleEndInterview() {
-    stopMic(); stopSpeaking(); setFinishing(true);
+    stopMic();
+    // NOTE: Do NOT call stopSpeaking() here — goodbye message may still be playing
+    // Speaking will stop naturally, or was already stopped before calling this
+    setFinishing(true);
     doneRef.current = true;
 
     // Mark session complete
@@ -372,7 +666,7 @@ export default function InterviewSessionPage() {
     // Try to generate feedback — if no answers, just go to history
     const res = await fetch("/api/feedback/generate", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: id }),
+      body: JSON.stringify({ sessionId: id, hintPenalty: totalPenalty }),
     });
 
     if (res.ok) {
@@ -397,6 +691,28 @@ export default function InterviewSessionPage() {
   return (
     <div className="max-w-3xl mx-auto flex flex-col" style={{ height: "calc(100vh - 4rem)" }}>
 
+      {/* Code Editor Modal */}
+      {showCodeEditor && session && !warmup && (
+        <CodeEditor
+          question={session.questions[currentIndex]?.text ?? ""}
+          questionId={session.questions[currentIndex]?.id ?? ""}
+          sessionId={id}
+          initialCode={session.questions[currentIndex]?.starterCode ?? undefined}
+          initialLanguage={session.questions[currentIndex]?.codeLanguage ?? undefined}
+          onClose={() => setShowCodeEditor(false)}
+          onSubmit={(code, review) => {
+            // Save code score
+            const qId = session.questions[currentIndex]?.id;
+            if (qId) setCodeScores((p) => ({ ...p, [qId]: review.score }));
+
+            // Submit code as answer text
+            const answerText = `[Code Submission — ${review.verdict.toUpperCase()} — Score: ${review.score}/100]\n\n\`\`\`\n${code}\n\`\`\`\n\nAI Review: ${review.summary}`;
+            setShowCodeEditor(false);
+            doSubmit(answerText);
+          }}
+        />
+      )}
+
       {/* ── Header ── */}
       <div className="shrink-0 pb-3">
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -405,7 +721,18 @@ export default function InterviewSessionPage() {
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <Badge variant="secondary" className={getDifficultyColor(session.difficulty)}>{session.difficulty}</Badge>
               <Badge variant="outline">{getRoundTypeLabel(session.roundType)}</Badge>
+              {session.panelInterview && (
+                <Badge variant="outline" className="border-blue-500/40 text-blue-300">3-AI panel</Badge>
+              )}
+              {session.pairProgramming && (
+                <Badge variant="outline" className="border-amber-500/40 text-amber-300">Pair programming</Badge>
+              )}
               <span className="text-xs text-muted-foreground">{answered}/{totalQ} answered</span>
+              {totalPenalty > 0 && (
+                <span className="text-xs text-yellow-400 flex items-center gap-0.5">
+                  💡 −{totalPenalty} pts
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -478,6 +805,123 @@ export default function InterviewSessionPage() {
           </div>
         </div>
         <Progress value={progress} className="mt-3" />
+
+        {/* ── Real-time Confidence Indicator ── */}
+        {latestConfidence && !warmup && (
+          <div className={`mt-2 flex items-center gap-3 rounded-lg px-3 py-2 text-xs border transition-all ${
+            latestConfidence.tone === "confident" || latestConfidence.tone === "strong"
+              ? "bg-green-500/10 border-green-500/20 text-green-400"
+              : latestConfidence.tone === "hesitant" || latestConfidence.tone === "nervous"
+              ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
+              : "bg-red-500/10 border-red-500/20 text-red-400"
+          }`}>
+            {/* Tone emoji */}
+            <span className="text-base shrink-0">
+              {latestConfidence.tone === "confident" ? "💪"
+                : latestConfidence.tone === "strong" ? "🔥"
+                : latestConfidence.tone === "hesitant" ? "🤔"
+                : latestConfidence.tone === "nervous" ? "😰"
+                : "😕"}
+            </span>
+
+            {/* Scores */}
+            <div className="flex items-center gap-3 flex-1">
+              <div className="flex items-center gap-1">
+                <span className="text-muted-foreground">Confidence:</span>
+                <span className="font-bold">{latestConfidence.confidenceScore}/100</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-muted-foreground">Quality:</span>
+                <span className="font-bold">{latestConfidence.qualityScore}/100</span>
+              </div>
+              <span className="capitalize font-medium">{latestConfidence.tone}</span>
+            </div>
+
+            {/* AI action hint */}
+            {latestConfidence.aiAction && (
+              <span className="text-muted-foreground italic hidden sm:block max-w-xs truncate">
+                {latestConfidence.aiAction}
+              </span>
+            )}
+          </div>
+        )}
+
+        {!warmup && (
+          <div className="mt-3 rounded-xl border border-border bg-card/60 px-3 py-3 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-foreground">Answer analysis</span>
+              <div className="flex items-center gap-2">
+                {listening && (
+                  <span className="text-[10px] font-medium text-amber-400 flex items-center gap-1">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    Live
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {submitting && (
+              <p className="text-xs text-muted-foreground animate-pulse">Analyzing confidence and tone…</p>
+            )}
+
+            {liveSpeakingHint !== null && !submitting && (
+              <div>
+                <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                  <span>Speaking / typing hint</span>
+                  <span>{liveSpeakingHint}%</span>
+                </div>
+                <Progress value={liveSpeakingHint} className="h-1.5" />
+                <p className="text-[10px] text-muted-foreground mt-1">Updates as you talk — final scores appear after you submit.</p>
+              </div>
+            )}
+
+            {latestConfidence && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                      <span>Confidence</span>
+                      <span className={getScoreColor(latestConfidence.confidenceScore)}>{latestConfidence.confidenceScore}%</span>
+                    </div>
+                    <Progress value={latestConfidence.confidenceScore} className="h-1.5" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                      <span>Answer quality</span>
+                      <span className={getScoreColor(latestConfidence.qualityScore)}>{latestConfidence.qualityScore}%</span>
+                    </div>
+                    <Progress value={latestConfidence.qualityScore} className="h-1.5" />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  <Badge variant="outline" className="text-[10px] capitalize">Tone: {latestConfidence.tone}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">{interviewSignalLabel(latestConfidence.signal)}</Badge>
+                  {latestConfidence.nextQuestionLevel && latestConfidence.nextQuestionLevel !== "same" && (
+                    <Badge variant="outline" className="text-[10px] capitalize">
+                      Next: {latestConfidence.nextQuestionLevel}
+                    </Badge>
+                  )}
+                </div>
+                {latestConfidence.indicators && latestConfidence.indicators.length > 0 && (
+                  <ul className="text-[10px] text-muted-foreground list-disc list-inside space-y-0.5">
+                    {latestConfidence.indicators.slice(0, 4).map((ind, i) => (
+                      <li key={i}>{ind}</li>
+                    ))}
+                  </ul>
+                )}
+                {latestConfidence.aiAction ? (
+                  <p className="text-xs text-muted-foreground leading-snug border-l-2 border-violet-500/40 pl-2.5">
+                    {latestConfidence.aiAction}
+                  </p>
+                ) : null}
+              </>
+            )}
+
+            {!latestConfidence && !liveSpeakingHint && !submitting && (
+              <p className="text-xs text-muted-foreground">Submit an answer to see AI confidence scores and coaching notes.</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Floating Camera Preview ── */}
@@ -519,6 +963,35 @@ export default function InterviewSessionPage() {
         </div>
       )}
 
+      {camEnabled && (videoInsight || videoInsightNote || videoInsightLoading) && (
+        <div className="mx-0 mb-2 rounded-lg border border-green-500/25 bg-green-500/5 px-3 py-2 text-xs space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-green-300">Video presence (snapshot)</span>
+            {videoInsightLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-green-400" />}
+          </div>
+          {videoInsightNote && <p className="text-muted-foreground">{videoInsightNote}</p>}
+          {videoInsight && (
+            <>
+              <div className="flex flex-wrap gap-3 text-[11px]">
+                <span>Eye contact est. <strong>{videoInsight.eyeContactScore}</strong>/100</span>
+                <span>Body language <strong>{videoInsight.bodyLanguageScore}</strong>/100</span>
+              </div>
+              <p className="text-zinc-300 leading-snug">{videoInsight.confidenceSummary}</p>
+              {videoInsight.signals?.length > 0 && (
+                <ul className="list-disc list-inside text-muted-foreground">
+                  {videoInsight.signals.slice(0, 4).map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              )}
+              {videoInsight.coachingTip && (
+                <p className="text-amber-200/90 border-l-2 border-amber-500/40 pl-2">{videoInsight.coachingTip}</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {sttError && (
         <div className="mx-0 mb-2 flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-200">
           <Mic className="h-3.5 w-3.5 shrink-0 mt-0.5" />
@@ -534,15 +1007,24 @@ export default function InterviewSessionPage() {
 
       {/* ── Chat ── */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin">
-        {messages.map((msg) => (
+        {messages.map((msg) => {
+          const panel = msg.panelAgent;
+          const meta = panel ? PANEL_AGENT_META[panel] : null;
+          return (
           <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${msg.role === "assistant" ? "bg-violet-600" : "bg-secondary"}`}>
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+              msg.role === "assistant" ? (meta?.botClass ?? "bg-violet-600") : "bg-secondary"
+            }`}>
               {msg.role === "assistant" ? <Bot className="h-4 w-4 text-white" /> : <User className="h-4 w-4" />}
             </div>
             <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
               msg.role === "assistant" ? "bg-card border border-border rounded-tl-sm" : "bg-violet-600 text-white rounded-tr-sm"
             }`}>
-              {/* Source badge for questions */}
+              {msg.role === "assistant" && meta && (
+                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full mb-2 mr-1 border ${meta.badgeClass}`}>
+                  {meta.emoji} {meta.label}
+                </span>
+              )}
               {msg.role === "assistant" && msg.source && (
                 <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full mb-2 mr-1 ${
                   msg.source === "resume"
@@ -560,7 +1042,8 @@ export default function InterviewSessionPage() {
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {/* Typing dots */}
         {submitting && (
@@ -663,6 +1146,43 @@ export default function InterviewSessionPage() {
                 <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Enter</kbd> to submit · <kbd className="px-1 py-0.5 rounded bg-secondary text-xs">Shift+Enter</kbd> for newline
               </p>
               <div className="flex items-center gap-2">
+                {/* Code Editor button — show for technical/coding questions */}
+                {!warmup &&
+                  (session?.roundType === "technical" ||
+                    session?.pairProgramming ||
+                    Boolean(session?.questions[currentIndex]?.starterCode)) && (
+                  <button
+                    onClick={() => setShowCodeEditor(true)}
+                    disabled={submitting}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-violet-400 transition-colors border border-border hover:border-violet-400/50 rounded-lg px-2 py-1"
+                    title="Open code editor for this question"
+                  >
+                    <Code2 className="h-3 w-3" /> Code
+                  </button>
+                )}
+                {/* Hint button */}
+                {!warmup && !done && (
+                  <button
+                    onClick={requestHint}
+                    disabled={submitting || hintLoading || hintLevel >= 3}
+                    title={hintLevel >= 3 ? "No more hints available" : `Get hint ${hintLevel + 1}/3 (−${(hintLevel + 1) * 5} pts)`}
+                    className={`flex items-center gap-1 text-xs transition-colors border rounded-lg px-2 py-1 ${
+                      hintLevel >= 3
+                        ? "border-border text-muted-foreground/40 cursor-not-allowed"
+                        : hintLevel > 0
+                        ? "border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"
+                        : "border-border text-muted-foreground hover:text-yellow-400 hover:border-yellow-400/50"
+                    }`}
+                  >
+                    {hintLoading
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <span>💡</span>}
+                    {hintLevel === 0 ? "Hint" : hintLevel >= 3 ? "No more hints" : `Hint ${hintLevel + 1}/3`}
+                    {hintLevel > 0 && hintLevel < 3 && (
+                      <span className="text-[10px] text-yellow-500/70">−{(hintLevel + 1) * 5}pts</span>
+                    )}
+                  </button>
+                )}
                 {/* Skip button */}
                 {!warmup && (
                   <button onClick={handleSkip} disabled={submitting}
@@ -699,11 +1219,34 @@ export default function InterviewSessionPage() {
             <CheckCircle className="h-6 w-6 text-green-500 shrink-0" />
             <div className="flex-1">
               <p className="text-sm font-semibold text-green-400">Interview complete!</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Your AI scorecard is ready</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {speaking ? "AI is speaking... please wait" : "Your AI scorecard is ready"}
+              </p>
             </div>
-            <Button onClick={handleEndInterview} disabled={finishing} className="shrink-0">
-              {finishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flag className="h-4 w-4" />}
-              Get Scorecard
+            <Button
+              onClick={() => {
+                // If AI is still speaking, wait for it to finish
+                if (speaking && ttsEnabled) {
+                  const check = setInterval(() => {
+                    if (!speakingRef.current) {
+                      clearInterval(check);
+                      setTimeout(() => handleEndInterview(), 500);
+                    }
+                  }, 300);
+                  setTimeout(() => { clearInterval(check); handleEndInterview(); }, 20_000);
+                } else {
+                  handleEndInterview();
+                }
+              }}
+              disabled={finishing}
+              className="shrink-0"
+            >
+              {finishing
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : speaking
+                ? <AudioLines className="h-4 w-4 animate-pulse" />
+                : <Flag className="h-4 w-4" />}
+              {finishing ? "Loading..." : speaking ? "Wait..." : "Get Scorecard"}
             </Button>
           </div>
         )}

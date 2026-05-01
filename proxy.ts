@@ -20,9 +20,10 @@ function addSecurityHeaders(res: NextResponse): NextResponse {
   // Content Security Policy
   res.headers.set(
     "Content-Security-Policy",
-    [
+      [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // Next.js needs unsafe-eval in dev
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+      "worker-src 'self' blob:",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self'",

@@ -49,9 +49,22 @@ export function useTTS(initialGender: VoiceGender = "male", lang = "en") {
   }, []);
 
   const speak = useCallback(
-    (text: string) => {
+    (rawText: string) => {
       if (!enabled || typeof window === "undefined" || !window.speechSynthesis) return;
       window.speechSynthesis.cancel();
+
+      // Strip emojis, markdown symbols, and other non-speakable characters
+      const text = rawText
+        // Remove emoji (Unicode ranges)
+        .replace(/[\u{1F000}-\u{1FFFF}]/gu, "")
+        .replace(/[\u{2600}-\u{27BF}]/gu, "")
+        .replace(/[\u{FE00}-\u{FEFF}]/gu, "")
+        // Remove markdown bold/italic/code markers
+        .replace(/[*_`~#]/g, "")
+        // Remove leftover whitespace from removals
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.92;
       utterance.volume = 1;
@@ -82,7 +95,7 @@ export function useTTS(initialGender: VoiceGender = "male", lang = "en") {
   }, []);
 
   useEffect(() => () => stop(), [stop]);
-  return { speak, stop, speaking, enabled, setEnabled, voiceGender, setVoiceGender };
+  return { speak, stop, speaking, enabled, setEnabled, voiceGender, setVoiceGender, voicesReady };
 }
 
 // ── Speech-to-Text ──────────────────────────────────────────────

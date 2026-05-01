@@ -103,6 +103,8 @@ export function questionGenerationPrompt(params: {
   language?: string;
   personaPrompt?: string;
   ragContext?: string;
+  /** When true (technical round), each item includes starterCode + codeLanguage for pair programming. */
+  pairProgramming?: boolean;
 }): string {
   const hasResume = params.resumeText.trim().length > 50;
   const resumeCount = hasResume ? Math.max(1, Math.round(params.count * 0.6)) : 0;
@@ -120,6 +122,17 @@ export function questionGenerationPrompt(params: {
   const ragNote = params.ragContext
     ? `\n${params.ragContext}\n`
     : "";
+
+  const pairNote =
+    params.pairProgramming && params.roundType === "technical"
+      ? `
+PAIR PROGRAMMING MODE:
+Each array object MUST also include:
+- "starterCode": one incomplete but runnable-looking code stub in the same language as below (use // TODO where the candidate must fill logic). No full solution.
+- "codeLanguage": one of "javascript" | "typescript" | "python" | "java"
+The interview question text should briefly say they should complete the stub.
+`
+      : "";
 
   const resumeSection = hasResume
     ? `
@@ -149,7 +162,7 @@ QUALITY STANDARDS — Every question must:
 - For system design: focus on trade-offs, scale, and failure scenarios
 - Avoid generic questions like "What is a closure?" — ask "When would you use a closure vs a class in Node.js and why?"
 
-${langNote}${personaNote}${ragNote}${resumeSection}
+${langNote}${personaNote}${ragNote}${pairNote}${resumeSection}
 ${generalSection}
 
 Return a single JSON array of exactly ${params.count} objects, resume-based questions first:
@@ -158,7 +171,9 @@ Return a single JSON array of exactly ${params.count} objects, resume-based ques
     "text": "question text here",
     "type": "main",
     "source": "resume" | "general",
-    "orderIndex": 1
+    "orderIndex": 1${params.pairProgramming && params.roundType === "technical" ? `,
+    "starterCode": "// optional stub with TODO — only in pair programming technical mode",
+    "codeLanguage": "javascript"` : ""}
   }
 ]
 
@@ -231,4 +246,146 @@ RULES:
 - If their answer was good, push them to the next level of depth
 
 Return only the follow-up question.`;
+}
+
+/** Drives follow-up generation after confidence analysis. */
+export type AdaptiveFollowupMode = "probe" | "next_level" | "easier" | "clarify";
+
+export function adaptiveFollowupPrompt(
+  question: string,
+  answer: string,
+  mode: AdaptiveFollowupMode
+): string {
+  const modeBlock: Record<AdaptiveFollowupMode, string> = {
+    probe: `MODE: The candidate sounds hesitant, vague, or incomplete.
+Ask ONE short follow-up that helps them clarify or complete their reasoning — supportive but specific to gaps in what they said.`,
+    next_level: `MODE: The candidate gave a strong, confident answer.
+Ask ONE harder follow-up that raises the bar — deeper trade-offs, scale, failure cases, or production edge cases — still one sentence.`,
+    easier: `MODE: The candidate is struggling.
+Ask ONE simpler, more concrete follow-up (smaller scope, definition-level, or step-by-step) so they can succeed — one sentence only.`,
+    clarify: `MODE: The answer may misunderstand the question or drift off-topic.
+Ask ONE precise follow-up that realigns them with what was originally asked — no lecturing — one sentence.`,
+  };
+
+  return `You are conducting a live technical interview.
+
+Original question: "${question}"
+
+Candidate's answer: "${answer}"
+
+${modeBlock[mode]}
+
+RULES:
+- Return ONLY the follow-up question text — no preamble, no "Great answer!", no explanation
+- Make it specific to what they actually said — not generic`;
+
+}
+
+// ── Confidence & Answer Quality Analyzer ────────────────────────
+export const CONFIDENCE_SYSTEM = `You are an expert interview coach analyzing candidate responses in real-time.
+Evaluate the answer quality and confidence level instantly. Return only valid JSON.`;
+
+export function confidenceAnalysisPrompt(question: string, answer: string): string {
+  return `Analyze this interview answer for confidence and quality. Return ONLY this JSON:
+{
+  "confidenceScore": 72,
+  "qualityScore": 68,
+  "tone": "hesitant",
+  "signal": "follow_up",
+  "indicators": ["Uses filler words", "Incomplete explanation", "Good technical knowledge shown"],
+  "aiAction": "The candidate seems unsure about the implementation details. Ask a clarifying follow-up.",
+  "nextQuestionLevel": "same"
+}
+
+tone must be: "confident" | "hesitant" | "confused" | "strong" | "nervous"
+signal must be: "follow_up" | "next_level" | "easier" | "proceed" | "clarify"
+nextQuestionLevel must be: "harder" | "same" | "easier"
+
+Scoring:
+- confidenceScore 0-100: How confident the candidate sounds
+- qualityScore 0-100: How good the actual answer content is
+
+Signal guide:
+- follow_up: Vague, hesitant, thin, or incomplete — candidate needs a clarifying follow-up (set nextQuestionLevel "same")
+- next_level: Strong, specific, confident answer — raise difficulty with a harder follow-up (prefer nextQuestionLevel "harder")
+- easier: Struggling — simpler follow-up (nextQuestionLevel "easier")
+- clarify: Off-topic or misunderstood — realign (nextQuestionLevel "same")
+- proceed: Solid adequate answer — no follow-up needed; normal flow to next main question (nextQuestionLevel "same")
+
+Use signal "next_level" when tone is confident or strong AND qualityScore is high (typically 72+) AND the answer shows depth — not just short bravado.
+
+Tone detection:
+- Look for: hedging words (maybe, I think, not sure), incomplete sentences → hesitant/nervous
+- Look for: direct statements, specific examples, technical depth → confident/strong
+- Look for: contradictions, going off-topic → confused
+
+Question: "${question}"
+Answer: "${answer}"`;
+}
+
+export const PANEL_QUESTION_SYSTEM = QUESTION_GENERATION_SYSTEM;
+
+export function panelInterviewPrompt(params: {
+  resumeText: string;
+  role: string;
+  difficulty: string;
+  count: number;
+  pairProgramming: boolean;
+  ragContext?: string;
+  language?: string;
+  personaPrompt?: string;
+}): string {
+  const langNote =
+    params.language && params.language !== "en"
+      ? `\nLANGUAGE: Generate ALL question text in ${params.language === "hi" ? "Hindi (हिंदी)" : params.language === "es" ? "Spanish (Español)" : "French (Français)"}.\n`
+      : "";
+
+  const pairBlock = params.pairProgramming
+    ? `
+PAIR PROGRAMMING: For every question where "panelAgent" is "technical", you MUST include:
+- "starterCode": incomplete stub with TODO markers (no full solution; should look like real interview starter code)
+- "codeLanguage": "javascript" | "typescript" | "python" | "java"
+For "hr" and "domain" questions, set starterCode and codeLanguage to null.
+`
+    : `
+Set "starterCode" and "codeLanguage" to null for all items unless you are explicitly adding a tiny illustrative snippet (prefer null).
+`;
+
+  const ragNote = params.ragContext ? `\n${params.ragContext}\n` : "";
+  const personaNote = params.personaPrompt
+    ? `\nINTERVIEWER PERSONA (tone for all agents):\n${params.personaPrompt}\n`
+    : "";
+
+  return `You are generating ONE combined mock interview where THREE AI interviewers take turns in ONE chat thread.
+
+Generate exactly ${params.count} questions for a ${params.role} candidate at ${params.difficulty} difficulty.
+
+Rotation (cycle through in order, starting at index 1):
+1) panelAgent "technical" — coding / algorithms / debugging / practical engineering for this role
+2) panelAgent "hr" — motivation, culture fit, career intent, salary/notice (professional tone)
+3) panelAgent "domain" — deep role-specific scenarios, trade-offs, and domain expertise for "${params.role}"
+
+${pairBlock}
+${langNote}${personaNote}${ragNote}
+
+Return ONLY a JSON array of ${params.count} objects:
+[
+  {
+    "text": "the question only — clear which code stub to complete if technical+pair",
+    "type": "main",
+    "orderIndex": 1,
+    "panelAgent": "technical" | "hr" | "domain",
+    "source": "general",
+    "starterCode": null or string,
+    "codeLanguage": null or string
+  }
+]
+
+Rules:
+- Question 1 must be technical, 2 hr, 3 domain, then repeat the cycle.
+- Each question must feel like a different interviewer persona (shorter sign-off is OK inside text).
+- No duplicate scenarios back-to-back.
+${params.resumeText.trim().length > 50 ? `\nCandidate resume excerpt for personalization:\n${params.resumeText.slice(0, 2200)}` : ""}
+
+IMPORTANT: Return ONLY the JSON array. No markdown, no extra keys.`;
 }
