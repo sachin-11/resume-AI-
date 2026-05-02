@@ -83,51 +83,66 @@ export default function AutoApplyPage() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const [resumesRes, settingsRes, jobsRes] = await Promise.all([
-      fetch("/api/resume/list"),
-      fetch("/api/auto-apply/settings"),
-      fetch(`/api/auto-apply/jobs?status=${activeFilter}&limit=50`),
-    ]);
-    const [resumesData, settingsData, jobsData] = await Promise.all([
-      resumesRes.json(), settingsRes.json(), jobsRes.json(),
-    ]);
-    setResumes(resumesData.resumes ?? []);
-    if (settingsData.settings) setSettings(settingsData.settings);
-    setJobs(jobsData.jobs ?? []);
-    setStats(jobsData.stats ?? {});
-    setLoading(false);
+    try {
+      const [resumesRes, settingsRes, jobsRes] = await Promise.all([
+        fetch("/api/resume/list"),
+        fetch("/api/auto-apply/settings"),
+        fetch(`/api/auto-apply/jobs?status=${activeFilter}&limit=50`),
+      ]);
+      const [resumesData, settingsData, jobsData] = await Promise.all([
+        resumesRes.json(), settingsRes.json(), jobsRes.json(),
+      ]);
+      setResumes(resumesData.resumes ?? []);
+      if (settingsData.settings) setSettings(settingsData.settings);
+      setJobs(jobsData.jobs ?? []);
+      setStats(jobsData.stats ?? {});
+    } catch (err) {
+      console.error("[AUTO_APPLY] fetchAll error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [activeFilter]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   async function saveSettings() {
     setSavingSettings(true);
-    await fetch("/api/auto-apply/settings", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
-    });
-    setSavingSettings(false);
-    setShowSettings(false);
+    try {
+      await fetch("/api/auto-apply/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      setShowSettings(false);
+    } catch (err) {
+      console.error("[AUTO_APPLY] saveSettings error:", err);
+    } finally {
+      setSavingSettings(false);
+    }
   }
 
   async function runFetch() {
     if (!settings.targetRole) { setShowSettings(true); return; }
     setFetching(true); setFetchResult(null);
-    const res = await fetch("/api/auto-apply/fetch-jobs", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        resumeId: settings.resumeId,
-        targetRole: settings.targetRole,
-        location: settings.location,
-        minMatchScore: settings.minMatchScore,
-        limit: settings.dailyLimit,
-      }),
-    });
-    const data = await res.json();
-    setFetching(false);
-    if (res.ok) {
-      setFetchResult(data);
-      fetchAll();
+    try {
+      const res = await fetch("/api/auto-apply/fetch-jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resumeId: settings.resumeId,
+          targetRole: settings.targetRole,
+          location: settings.location,
+          minMatchScore: settings.minMatchScore,
+          limit: settings.dailyLimit,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFetchResult(data);
+        fetchAll();
+      }
+    } catch (err) {
+      console.error("[AUTO_APPLY] runFetch error:", err);
+    } finally {
+      setFetching(false);
     }
   }
 
