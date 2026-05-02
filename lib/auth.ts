@@ -5,13 +5,21 @@ import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import type { UserRole } from "@/lib/permissions";
 
-const USER_ROLES: readonly UserRole[] = ["admin", "recruiter", "viewer"];
+// ── Super admin email — only this account gets admin role ────────
+const SUPER_ADMIN_EMAIL = "rajeshsachin786@gmail.com";
+
+function getRoleForEmail(email: string, dbRole: string): string {
+  if (email === SUPER_ADMIN_EMAIL) return "admin";
+  return dbRole ?? "candidate";
+}
+
+const USER_ROLES: readonly UserRole[] = ["admin", "recruiter", "viewer", "candidate"];
 
 function normalizeUserRole(value: unknown): UserRole {
   if (typeof value === "string" && (USER_ROLES as readonly string[]).includes(value)) {
     return value as UserRole;
   }
-  return "admin";
+  return "candidate";
 }
 
 export const authOptions: NextAuthOptions = {
@@ -50,7 +58,7 @@ export const authOptions: NextAuthOptions = {
         const isValid = await bcrypt.compare(credentials.password, user.password);
         if (!isValid) return null;
 
-        const role = user.teamMembership?.role ?? user.role ?? "admin";
+        const role = getRoleForEmail(user.email, user.teamMembership?.role ?? user.role ?? "candidate");
         const orgId = user.ownedOrg?.id ?? user.teamMembership?.orgId ?? null;
 
         return { id: user.id, email: user.email, name: user.name, role, orgId };
@@ -72,7 +80,7 @@ export const authOptions: NextAuthOptions = {
               email: user.email,
               name: user.name ?? "",
               password: "", // Google users don't need password
-              role: "admin",
+              role: user.email === SUPER_ADMIN_EMAIL ? "admin" : "candidate",
             },
           });
         }
@@ -85,7 +93,10 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         // Credentials login
         token.id = user.id;
-        token.role = (user as { role?: string }).role ?? "admin";
+        token.role = getRoleForEmail(
+          (user as { email?: string }).email ?? "",
+          (user as { role?: string }).role ?? "candidate"
+        );
         token.orgId = (user as { orgId?: string | null }).orgId ?? null;
       }
 
@@ -97,7 +108,10 @@ export const authOptions: NextAuthOptions = {
         });
         if (dbUser) {
           token.id = dbUser.id;
-          token.role = dbUser.teamMembership?.role ?? dbUser.role ?? "admin";
+          token.role = getRoleForEmail(
+            token.email ?? "",
+            dbUser.teamMembership?.role ?? dbUser.role ?? "candidate"
+          );
           token.orgId = dbUser.ownedOrg?.id ?? dbUser.teamMembership?.orgId ?? null;
         }
       }

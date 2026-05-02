@@ -21,6 +21,9 @@ export async function POST(req: NextRequest) {
     const { name, email, password } = parsed.data;
     const phone: string | undefined = body?.phone;
     const phoneVerified: boolean = body?.phoneVerified === true;
+    const role: string = ["candidate", "recruiter", "admin"].includes(body?.role)
+      ? body.role
+      : "candidate"; // default to candidate for new signups
 
     const existing = await db.user.findUnique({ where: { email } });
     if (existing) {
@@ -29,8 +32,8 @@ export async function POST(req: NextRequest) {
 
     const hashed = await bcrypt.hash(password, 12);
     const user = await db.user.create({
-      data: { name, email, password: hashed, ...(phone ? { phone, phoneVerified } : {}) },
-      select: { id: true, email: true, name: true },
+      data: { name, email, password: hashed, role, ...(phone ? { phone, phoneVerified } : {}) },
+      select: { id: true, email: true, name: true, role: true },
     });
 
     return NextResponse.json({ user }, { status: 201 });

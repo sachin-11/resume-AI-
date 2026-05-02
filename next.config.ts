@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
     CRON_SECRET: process.env.CRON_SECRET,
     AGENT_SERVICE_URL: process.env.AGENT_SERVICE_URL,
     AGENT_SECRET: process.env.AGENT_SECRET,
+    JSEARCH_API_KEY: process.env.JSEARCH_API_KEY,
   },
 };
 

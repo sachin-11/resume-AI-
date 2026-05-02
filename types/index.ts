@@ -85,7 +85,7 @@ declare module "next-auth" {
       id: string;
       name?: string | null;
       email?: string | null;
-      role: "admin" | "recruiter" | "viewer";
+      role: "admin" | "recruiter" | "viewer" | "candidate";
       orgId: string | null;
     };
   }

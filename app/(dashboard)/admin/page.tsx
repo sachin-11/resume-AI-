@@ -86,6 +86,17 @@ export default function AdminPage() {
     setUpdatingId("");
   }
 
+  async function handleRoleChange(userId: string, role: string) {
+    setUpdatingId(userId + "-role");
+    await fetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, role }),
+    });
+    setUsers((p) => p.map((u) => u.id === userId ? { ...u, role } : u));
+    setUpdatingId("");
+  }
+
   if (status === "loading") return (
     <div className="flex items-center justify-center h-64">
       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -189,8 +200,21 @@ export default function AdminPage() {
                         <SelectItem value="enterprise">Enterprise</SelectItem>
                       </SelectContent>
                     </Select>
-                    {/* Role badge */}
-                    <Badge variant="outline" className="text-xs shrink-0">{u.role}</Badge>
+                    {/* Role selector */}
+                    <Select value={u.role} onValueChange={(v) => handleRoleChange(u.id, v)}
+                      disabled={updatingId === u.id + "-role" || u.email === "rajeshsachin786@gmail.com"}>
+                      <SelectTrigger className="w-[110px] h-8 text-xs">
+                        {updatingId === u.id + "-role"
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <SelectValue />}
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="candidate">👤 Candidate</SelectItem>
+                        <SelectItem value="recruiter">🏢 Recruiter</SelectItem>
+                        <SelectItem value="viewer">👁️ Viewer</SelectItem>
+                        <SelectItem value="admin">🔑 Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 );
               })}

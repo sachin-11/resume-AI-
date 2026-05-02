@@ -30,6 +30,7 @@ export default function RegisterPage() {
   const [step, setStep] = useState<"details" | "otp">("details");
 
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "" });
+  const [selectedRole, setSelectedRole] = useState<"candidate" | "recruiter">("candidate");
   const [showPassword, setShowPassword] = useState(false);
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [countdown, setCountdown] = useState(0);
@@ -123,7 +124,7 @@ export default function RegisterPage() {
     const regRes = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, phoneVerified: true }),
+      body: JSON.stringify({ ...form, phoneVerified: true, role: selectedRole }),
     });
     const regData = await regRes.json();
     if (!regRes.ok) {
@@ -140,7 +141,8 @@ export default function RegisterPage() {
     });
 
     if (result?.ok) {
-      router.push("/dashboard");
+      // Redirect based on role
+      router.push(selectedRole === "candidate" ? "/candidate-home" : "/dashboard");
     } else {
       router.push("/login?registered=true");
     }
@@ -197,6 +199,34 @@ export default function RegisterPage() {
                   {error && (
                     <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400">{error}</div>
                   )}
+
+                  {/* Role Selection */}
+                  <div className="space-y-2">
+                    <Label>I am a...</Label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {([
+                        { role: "candidate", emoji: "👤", label: "Candidate", desc: "Looking for jobs" },
+                        { role: "recruiter", emoji: "🏢", label: "Recruiter", desc: "Hiring talent" },
+                      ] as const).map(({ role, emoji, label, desc }) => (
+                        <button
+                          key={role}
+                          type="button"
+                          onClick={() => setSelectedRole(role)}
+                          className={`rounded-xl border p-3 text-left transition-all ${
+                            selectedRole === role
+                              ? role === "candidate"
+                                ? "border-green-500 bg-green-500/10"
+                                : "border-blue-500 bg-blue-500/10"
+                              : "border-border hover:bg-accent"
+                          }`}
+                        >
+                          <div className="text-xl mb-1">{emoji}</div>
+                          <p className="text-sm font-semibold">{label}</p>
+                          <p className="text-[10px] text-muted-foreground">{desc}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="space-y-2">
                     <Label>Full Name</Label>
                     <Input placeholder="John Doe" value={form.name}

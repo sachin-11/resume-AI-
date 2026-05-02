@@ -48,9 +48,21 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { userId, plan } = await req.json();
-  if (!userId || !plan) return NextResponse.json({ error: "userId and plan required" }, { status: 400 });
+  const { userId, plan, role } = await req.json();
+  if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
 
-  await db.user.update({ where: { id: userId }, data: { plan } });
+  // Prevent changing super admin's role
+  const targetUser = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
+  if (targetUser?.email === "rajeshsachin786@gmail.com" && role) {
+    return NextResponse.json({ error: "Cannot change super admin role" }, { status: 403 });
+  }
+
+  const updateData: Record<string, string> = {};
+  if (plan) updateData.plan = plan;
+  if (role && ["candidate", "recruiter", "viewer", "admin"].includes(role)) {
+    updateData.role = role;
+  }
+
+  await db.user.update({ where: { id: userId }, data: updateData });
   return NextResponse.json({ success: true });
 }

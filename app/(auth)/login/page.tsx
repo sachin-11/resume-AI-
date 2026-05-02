@@ -38,13 +38,17 @@ function LoginForm() {
       setError("Invalid email or password");
       setLoading(false);
     } else {
-      router.push("/dashboard");
+      // Fetch session to get role, then redirect accordingly
+      const sessionRes = await fetch("/api/auth/session");
+      const sessionData = await sessionRes.json();
+      const role = sessionData?.user?.role ?? "candidate";
+      router.push(role === "candidate" ? "/candidate-home" : "/dashboard");
     }
   }
 
   async function handleGoogle() {
     setGoogleLoading(true);
-    await signIn("google", { callbackUrl: "/dashboard" });
+    await signIn("google", { callbackUrl: "/api/auth/role-redirect" });
   }
 
   return (

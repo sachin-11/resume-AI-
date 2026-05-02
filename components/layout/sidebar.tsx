@@ -6,38 +6,76 @@ import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, FileText, Upload, MessageSquare,
   BarChart3, Settings, LogOut, Brain, ChevronRight,
-  User, Users, Shield, BookOpen, Zap, CreditCard, Sparkles, Headphones, Menu, X, Sun, Moon, Briefcase, Bot, Wand2,
+  User, Users, Shield, BookOpen, Zap, CreditCard,
+  Sparkles, Headphones, Menu, X, Sun, Moon,
+  Briefcase, Bot, Wand2, Home,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { can } from "@/lib/permissions";
+import { can, ROLE_META, type UserRole } from "@/lib/permissions";
 import { useTheme } from "@/components/providers/theme-provider";
 
-const NAV_ITEMS = [
-  { href: "/dashboard",         label: "Dashboard",         icon: LayoutDashboard },
+// ── Candidate nav ────────────────────────────────────────────────
+const CANDIDATE_NAV = [
+  { href: "/candidate-home",    label: "Home",              icon: Home },
   { href: "/chat",              label: "AI Assistant",      icon: Sparkles },
-  { href: "/upload-resume",     label: "Upload Resume",     icon: Upload,        perm: "uploadResume" },
-  { href: "/resume-report",     label: "Resume Reports",    icon: FileText,      perm: "viewResumes" },
-  { href: "/resume-improve",    label: "AI Resume Improve", icon: Wand2,         perm: "uploadResume" },
-  { href: "/interview/setup",   label: "New Interview",     icon: MessageSquare, perm: "createInterview" },
-  { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones,   perm: "viewInterviews" },
-  { href: "/history",           label: "Interview History", icon: BarChart3,     perm: "viewInterviews" },
-  { href: "/campaigns",         label: "Bulk Interviews",   icon: Users,         perm: "viewCampaigns" },
-  { href: "/job-match",         label: "Job Match",         icon: Briefcase,     perm: "viewCampaigns" },
-  { href: "/job-agent",         label: "Job Agent",         icon: Bot,           perm: "uploadResume" },
-  { href: "/ai-agents",         label: "AI Agents Hub",     icon: Sparkles,      perm: "uploadResume" },
-  { href: "/question-bank",     label: "Question Bank",     icon: BookOpen,      perm: "createInterview" },
-  { href: "/team",              label: "Team",              icon: Shield,        perm: "viewTeam" },
-  { href: "/settings/webhooks", label: "Webhooks",          icon: Zap,           perm: "manageTeam" },
-  { href: "/billing",           label: "Billing",           icon: CreditCard,    adminOnly: true },
+  { href: "/upload-resume",     label: "Upload Resume",     icon: Upload },
+  { href: "/resume-report",     label: "Resume Reports",    icon: FileText },
+  { href: "/resume-improve",    label: "AI Resume Improve", icon: Wand2 },
+  { href: "/interview/setup",   label: "New Interview",     icon: MessageSquare },
+  { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones },
+  { href: "/history",           label: "Interview History", icon: BarChart3 },
+  { href: "/job-agent",         label: "Job Agent",         icon: Briefcase },
+  { href: "/auto-apply",        label: "Auto Apply Agent",  icon: Zap },
+  { href: "/ai-agents",         label: "AI Agents Hub",     icon: Bot },
   { href: "/settings",          label: "Settings",          icon: Settings },
 ] as const;
 
-const ROLE_BADGE: Record<string, string> = {
-  admin:     "bg-violet-500/20 text-violet-400",
-  recruiter: "bg-blue-500/20 text-blue-400",
-  viewer:    "bg-green-500/20 text-green-400",
-};
+// ── Recruiter nav ────────────────────────────────────────────────
+const RECRUITER_NAV = [
+  { href: "/dashboard",         label: "Dashboard",         icon: LayoutDashboard },
+  { href: "/chat",              label: "AI Assistant",      icon: Sparkles },
+  { href: "/campaigns",         label: "Bulk Interviews",   icon: Users },
+  { href: "/job-match",         label: "Job Match",         icon: Briefcase },
+  { href: "/ai-agents",         label: "AI Agents Hub",     icon: Bot },
+  { href: "/question-bank",     label: "Question Bank",     icon: BookOpen },
+  { href: "/team",              label: "Team",              icon: Shield },
+  { href: "/settings/webhooks", label: "Webhooks",          icon: Zap },
+  { href: "/billing",           label: "Billing",           icon: CreditCard },
+  { href: "/settings",          label: "Settings",          icon: Settings },
+] as const;
+
+// ── Admin nav (everything) ───────────────────────────────────────
+const ADMIN_NAV = [
+  { href: "/dashboard",         label: "Dashboard",         icon: LayoutDashboard },
+  { href: "/chat",              label: "AI Assistant",      icon: Sparkles },
+  // Candidate tools
+  { href: "/upload-resume",     label: "Upload Resume",     icon: Upload },
+  { href: "/resume-report",     label: "Resume Reports",    icon: FileText },
+  { href: "/resume-improve",    label: "AI Resume Improve", icon: Wand2 },
+  { href: "/interview/setup",   label: "New Interview",     icon: MessageSquare },
+  { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones },
+  { href: "/history",           label: "Interview History", icon: BarChart3 },
+  { href: "/job-agent",         label: "Job Agent",         icon: Briefcase },
+  { href: "/auto-apply",        label: "Auto Apply Agent",  icon: Zap },
+  // Recruiter tools
+  { href: "/campaigns",         label: "Bulk Interviews",   icon: Users },
+  { href: "/job-match",         label: "Job Match",         icon: Briefcase },
+  { href: "/ai-agents",         label: "AI Agents Hub",     icon: Bot },
+  { href: "/question-bank",     label: "Question Bank",     icon: BookOpen },
+  { href: "/team",              label: "Team",              icon: Shield },
+  { href: "/settings/webhooks", label: "Webhooks",          icon: Zap },
+  // Admin
+  { href: "/admin",             label: "Admin Panel",       icon: Shield },
+  { href: "/billing",           label: "Billing",           icon: CreditCard },
+  { href: "/settings",          label: "Settings",          icon: Settings },
+] as const;
+
+function getNavItems(role: UserRole) {
+  if (role === "candidate") return CANDIDATE_NAV;
+  if (role === "recruiter") return RECRUITER_NAV;
+  return ADMIN_NAV; // admin + viewer
+}
 
 // ── Shared nav content ───────────────────────────────────────────
 function NavContent({
@@ -45,17 +83,18 @@ function NavContent({
 }: {
   pathname: string;
   session: { user?: { name?: string | null } } | null;
-  role: "admin" | "recruiter" | "viewer";
+  role: UserRole;
   onClose?: () => void;
 }) {
   const { theme, toggle } = useTheme();
-  const items = NAV_ITEMS.filter((item) => {
-    if ("adminOnly" in item && item.adminOnly) return role === "admin";
-    if ("perm" in item && item.perm) {
-      try { return can(role, item.perm as Parameters<typeof can>[1]); } catch { return false; }
-    }
-    return true;
-  });
+  const items = getNavItems(role);
+  const meta = ROLE_META[role] ?? ROLE_META.candidate;
+
+  // Section dividers for admin
+  const SECTION_BEFORE: Record<string, string> = {
+    "/campaigns":   "── Recruiter Tools ──",
+    "/admin":       "── Admin ──",
+  };
 
   return (
     <div className="flex flex-col h-full bg-card border-r border-border">
@@ -67,7 +106,9 @@ function NavContent({
           </div>
           <div>
             <p className="font-bold text-sm">AI Resume Coach</p>
-            <p className="text-xs text-muted-foreground">Interview Prep</p>
+            <p className="text-xs text-muted-foreground">
+              {meta.emoji} {meta.label} Mode
+            </p>
           </div>
         </div>
         {onClose && (
@@ -78,20 +119,29 @@ function NavContent({
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {items.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href || (href !== "/settings" && pathname.startsWith(href + "/"));
+          const active = pathname === href || (href !== "/settings" && href.length > 1 && pathname.startsWith(href + "/"));
+          const sectionLabel = role === "admin" ? SECTION_BEFORE[href] : null;
+
           return (
-            <Link key={href} href={href} onClick={onClose}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all",
-                active ? "bg-violet-600/10 text-violet-500" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+            <div key={href}>
+              {sectionLabel && (
+                <p className="text-[10px] text-muted-foreground/50 uppercase tracking-widest px-3 pt-4 pb-1 font-semibold">
+                  {sectionLabel}
+                </p>
               )}
-            >
-              <Icon className={cn("h-4 w-4 shrink-0", active && "text-violet-500")} />
-              <span className="flex-1">{label}</span>
-              {active && <ChevronRight className="h-3 w-3 text-violet-500" />}
-            </Link>
+              <Link href={href} onClick={onClose}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all",
+                  active ? "bg-violet-600/10 text-violet-500" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+              >
+                <Icon className={cn("h-4 w-4 shrink-0", active && "text-violet-500")} />
+                <span className="flex-1">{label}</span>
+                {active && <ChevronRight className="h-3 w-3 text-violet-500" />}
+              </Link>
+            </div>
           );
         })}
       </nav>
@@ -104,11 +154,10 @@ function NavContent({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">{session?.user?.name ?? "User"}</p>
-            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize ${ROLE_BADGE[role] ?? ROLE_BADGE.viewer}`}>
-              {role}
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize ${meta.badgeClass}`}>
+              {meta.emoji} {meta.label}
             </span>
           </div>
-          {/* Theme toggle */}
           <button
             onClick={toggle}
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
@@ -131,20 +180,17 @@ function NavContent({
 export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
-  const role = (session?.user?.role ?? "admin") as "admin" | "recruiter" | "viewer";
+  const role = (session?.user?.role ?? "candidate") as UserRole;
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Close mobile menu on route change
   useEffect(() => { setMobileOpen(false); }, [pathname]);
 
   return (
     <>
-      {/* ── Desktop sidebar (always visible on lg+) ── */}
       <aside className="hidden lg:flex fixed left-0 top-0 z-40 h-screen w-64 flex-col">
         <NavContent pathname={pathname} session={session} role={role} />
       </aside>
 
-      {/* ── Mobile: hamburger button ── */}
       <button
         onClick={() => setMobileOpen(true)}
         aria-label="Open menu"
@@ -153,7 +199,6 @@ export function Sidebar() {
         <Menu className="h-4 w-4" />
       </button>
 
-      {/* ── Mobile: drawer overlay ── */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/60" onClick={() => setMobileOpen(false)} />

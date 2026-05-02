@@ -38,6 +38,8 @@ model User {
   copilotLinkSessions CopilotLinkSession[]
   jobDescriptions  JobDescription[]
   jobApplications  JobApplication[]
+  autoApplyJobs    AutoApplyJob[]
+  autoApplySettings AutoApplySettings?
 }
 
 // ── Laptop ↔ phone (same account): share STT text for answer on phone ─
@@ -333,6 +335,60 @@ model ResumeMatch {
 
   @@unique([jobDescriptionId, resumeId])
   @@index([jobDescriptionId])
+}
+
+// ── Auto Job Apply Agent ─────────────────────────────────────────
+model AutoApplyJob {
+  id               String   @id @default(cuid())
+  userId           String
+  resumeId         String?
+  // Job details (from JSearch API or manual)
+  jobTitle         String
+  company          String
+  location         String?
+  jobUrl           String?
+  jobDescription   String   @db.Text
+  salary           String?
+  jobType          String?  // full-time | part-time | contract
+  source           String   @default("jsearch") // jsearch | manual
+  externalId       String?  // JSearch job_id
+  // AI outputs
+  matchScore       Int?     // 0-100
+  matchedSkills    String[]
+  missingSkills    String[]
+  coverLetter      String?  @db.Text
+  hrEmail          String?
+  // Status
+  status           String   @default("found")
+  // found | skipped | applied | email_sent | interview | offer | rejected
+  appliedAt        DateTime?
+  emailSentAt      DateTime?
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, status])
+  @@index([userId, createdAt])
+}
+
+// ── Auto Apply Settings ──────────────────────────────────────────
+model AutoApplySettings {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  resumeId         String?
+  targetRole       String
+  location         String   @default("India")
+  minMatchScore    Int      @default(65)
+  autoEmailEnabled Boolean  @default(false)
+  companyName      String   @default("Candidate")
+  dailyLimit       Int      @default(10)
+  isActive         Boolean  @default(false)
+  lastRunAt        DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ── Interview Scheduling ─────────────────────────────────────────

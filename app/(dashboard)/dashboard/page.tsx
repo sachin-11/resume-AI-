@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import {
   BarChart3, FileText, MessageSquare, TrendingUp,
   Upload, ArrowRight, Loader2, Trophy, Users, Zap, Crown, CalendarDays,
@@ -44,6 +45,14 @@ function ScoreTooltip({ active, payload, label }: { active?: boolean; payload?: 
 
 export default function DashboardPage() {
   const { data: session } = useSession();
+  const router = useRouter();
+
+  // Candidates should go to their own home page
+  useEffect(() => {
+    if (session?.user?.role === "candidate") {
+      router.replace("/candidate-home");
+    }
+  }, [session, router]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [trends, setTrends] = useState<Trend[]>([]);
   const [byRole, setByRole] = useState<ByRole[]>([]);
