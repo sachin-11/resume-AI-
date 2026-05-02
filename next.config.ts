@@ -27,6 +27,7 @@ const nextConfig: NextConfig = {
     AGENT_SERVICE_URL: process.env.AGENT_SERVICE_URL,
     AGENT_SECRET: process.env.AGENT_SECRET,
     JSEARCH_API_KEY: process.env.JSEARCH_API_KEY,
+    NEXT_PUBLIC_HAS_JSEARCH: process.env.NEXT_PUBLIC_HAS_JSEARCH,
   },
 };
 
