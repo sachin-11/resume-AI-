@@ -314,8 +314,8 @@ export default function AIAgentsPage() {
                           {(dailyResult.actionItems as Array<Record<string, unknown>>).map((a, i) => (
                             <li key={i} className="text-xs text-muted-foreground border-l-2 border-cyan-500/40 pl-2">
                               <span className="font-medium text-foreground">{String(a.task ?? "")}</span>
-                              {(a.owner || a.due) && (
-                                <span className="text-[10px] text-muted-foreground"> — {String(a.owner ?? "")}{a.due ? ` · ${String(a.due)}` : ""}</span>
+                              {Boolean(a.owner || a.due) && (
+                                <span className="text-[10px] text-muted-foreground"> — {String(a.owner ?? "")}{a.due != null && String(a.due) !== "" ? ` · ${String(a.due)}` : ""}</span>
                               )}
                             </li>
                           ))}
