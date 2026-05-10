@@ -1,15 +1,34 @@
 "use client";
 import { useState, useEffect } from "react";
 import {
-  Bot, Loader2, AlertCircle, CheckCircle2, ChevronDown, ChevronUp,
-  Zap, TrendingUp, Users, BookOpen, BarChart3, GitBranch,
-  ArrowRight, Copy, Check, ExternalLink, Star,
+  Bot, Loader2, AlertCircle, ChevronDown, ChevronUp,
+  Users, BookOpen, BarChart3, GitBranch,
+  Copy, Check, ExternalLink, Star, ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // ── Types ────────────────────────────────────────────────────────
 interface Resume { id: string; fileName: string; }
 interface InterviewSession { id: string; title: string; role: string; status: string; }
+
+const DAILY_OPS_TASKS: { value: string; label: string }[] = [
+  { value: "morning_summary", label: "Morning task summary" },
+  { value: "gmail_summarize", label: "Gmail / email summarize" },
+  { value: "slack_whatsapp_summarize", label: "Slack / WhatsApp summarize" },
+  { value: "jira_check", label: "Jira tickets check" },
+  { value: "daily_standup", label: "Daily standup" },
+  { value: "calendar_reminders", label: "Calendar reminders" },
+  { value: "notes_organize", label: "Notes organize" },
+  { value: "expense_tracking", label: "Expense tracking" },
+  { value: "fitness_reminders", label: "Fitness / diet reminders" },
+  { value: "coding_tasks", label: "Coding tasks" },
+  { value: "github_pr_review", label: "GitHub PR review summary" },
+  { value: "auto_document", label: "Auto document generation" },
+  { value: "meeting_summary", label: "Meeting summary + actions" },
+  { value: "followup_reminders", label: "Follow-up reminders" },
+  { value: "learning_planner", label: "Daily learning planner" },
+  { value: "research_news", label: "AI research / news summarize" },
+];
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -107,6 +126,13 @@ export default function AIAgentsPage() {
   const [marketResult, setMarketResult] = useState<Record<string, unknown> | null>(null);
   const [marketLogs, setMarketLogs] = useState<string[]>([]);
 
+  const [dailyTaskType, setDailyTaskType] = useState("morning_summary");
+  const [dailyContext, setDailyContext] = useState("");
+  const [dailyFocus, setDailyFocus] = useState("");
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyResult, setDailyResult] = useState<Record<string, unknown> | null>(null);
+  const [dailyLogs, setDailyLogs] = useState<string[]>([]);
+
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -185,6 +211,24 @@ export default function AIAgentsPage() {
     setMarketResult(data.report); setMarketLogs(data.logs ?? []);
   }
 
+  async function runDailyOps() {
+    if (!dailyContext.trim()) { setError("daily", "Paste emails, notes, chat export, tickets, or PR text"); return; }
+    clearError("daily"); setDailyLoading(true); setDailyResult(null);
+    const res = await fetch("/api/agents/daily-ops", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        taskType: dailyTaskType,
+        userContext: dailyContext,
+        optionalFocus: dailyFocus,
+      }),
+    });
+    const data = await res.json();
+    setDailyLoading(false);
+    if (!res.ok) { setError("daily", data.error ?? "Failed"); return; }
+    setDailyResult(data.report); setDailyLogs(data.logs ?? []);
+  }
+
   const RECOMMENDATION_COLOR: Record<string, string> = {
     shortlist: "#22c55e", maybe: "#eab308", reject: "#ef4444",
     hire: "#22c55e", strong_hire: "#22c55e", no_hire: "#ef4444", hold: "#eab308",
@@ -199,7 +243,7 @@ export default function AIAgentsPage() {
           <Bot className="h-6 w-6 text-violet-500" /> AI Agents Hub
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          5 LangGraph agents — each with its own graph, nodes, and decision logic.
+          6 LangGraph agents — each with its own graph, nodes, and decision logic.
         </p>
       </div>
 
@@ -227,6 +271,111 @@ export default function AIAgentsPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+        {/* ── Daily Ops Agent (full width) ── */}
+        <div className="lg:col-span-2">
+          <AgentCard icon={ClipboardList} title="Daily Ops Agent" badge="16 tasks"
+            description="Summaries, standup, inbox-style digests — paste Gmail exports, Slack/Teams text, Jira lists, PR bodies, meeting notes (live OAuth optional later)"
+            color="#06b6d4" logs={dailyLogs}
+            result={dailyResult ? (
+              <div className="space-y-3">
+                {"error" in dailyResult && dailyResult.error ? (
+                  <p className="text-sm text-red-400">{String(dailyResult.error)}</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-500/90">
+                          {String(dailyResult.taskLabel ?? dailyResult.taskType ?? "")}
+                        </p>
+                        <h4 className="text-base font-semibold">{String(dailyResult.title ?? "")}</h4>
+                      </div>
+                      <CopyButton text={JSON.stringify(dailyResult, null, 2)} />
+                    </div>
+                    {!!dailyResult.summary && (
+                      <p className="text-sm text-muted-foreground leading-relaxed">{String(dailyResult.summary)}</p>
+                    )}
+                    {(dailyResult.sections as Array<{ heading?: string; bullets?: string[] }>)?.length > 0 && (
+                      <div className="space-y-2">
+                        {(dailyResult.sections as Array<{ heading?: string; bullets?: string[] }>).map((sec, i) => (
+                          <div key={i} className="rounded-lg border border-border/80 bg-background/50 p-3">
+                            <p className="text-xs font-semibold text-cyan-600 dark:text-cyan-400">{String(sec.heading ?? "")}</p>
+                            <ul className="mt-1 list-disc list-inside text-xs text-muted-foreground space-y-0.5">
+                              {(sec.bullets ?? []).map((b, j) => <li key={j}>{b}</li>)}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {(dailyResult.actionItems as Array<Record<string, unknown>>)?.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-foreground mb-1">Action items</p>
+                        <ul className="space-y-1">
+                          {(dailyResult.actionItems as Array<Record<string, unknown>>).map((a, i) => (
+                            <li key={i} className="text-xs text-muted-foreground border-l-2 border-cyan-500/40 pl-2">
+                              <span className="font-medium text-foreground">{String(a.task ?? "")}</span>
+                              {(a.owner || a.due) && (
+                                <span className="text-[10px] text-muted-foreground"> — {String(a.owner ?? "")}{a.due ? ` · ${String(a.due)}` : ""}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {(dailyResult.followUpReminders as Array<Record<string, unknown>>)?.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-foreground mb-1">Follow-ups</p>
+                        <ul className="text-xs text-muted-foreground space-y-1">
+                          {(dailyResult.followUpReminders as Array<Record<string, unknown>>).map((f, i) => (
+                            <li key={i}>• {String(f.when ?? "")}: {String(f.what ?? "")}{f.channel ? ` (${String(f.channel)})` : ""}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {(dailyResult.quickWins as string[])?.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-green-500 mb-1">Quick wins</p>
+                        <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+                          {(dailyResult.quickWins as string[]).map((q, i) => <li key={i}>{q}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {(dailyResult.risksOrBlockers as string[])?.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-amber-500 mb-1">Risks / blockers</p>
+                        <ul className="text-xs text-muted-foreground list-disc list-inside">{(dailyResult.risksOrBlockers as string[]).map((r, i) => <li key={i}>{r}</li>)}</ul>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : undefined}>
+            <div className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-1 sm:col-span-2">
+                  <label className="text-xs text-muted-foreground">Task type</label>
+                  <select className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    value={dailyTaskType} onChange={e => setDailyTaskType(e.target.value)}>
+                    {DAILY_OPS_TASKS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <label className="text-xs text-muted-foreground">Focus / constraints (optional)</label>
+                  <input className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    placeholder="e.g. IST, no meetings after 5pm, project Alpha"
+                    value={dailyFocus} onChange={e => setDailyFocus(e.target.value)} />
+                </div>
+              </div>
+              <textarea rows={6} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-y min-h-[120px]"
+                placeholder="Paste content to process: email threads, Slack export, WhatsApp copy-paste, Jira tickets, calendar list, meeting notes, PR description + diff summary, expenses…"
+                value={dailyContext} onChange={e => setDailyContext(e.target.value)} />
+              {errors.daily && <p className="text-red-400 text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3" />{errors.daily}</p>}
+              <Button onClick={runDailyOps} disabled={dailyLoading} className="w-full gap-2 bg-cyan-600 hover:bg-cyan-700">
+                {dailyLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Running Daily Ops…</> : <><ClipboardList className="h-4 w-4" />Run Daily Ops</>}
+              </Button>
+            </div>
+          </AgentCard>
+        </div>
 
         {/* ── Agent 1: Candidate Screening ── */}
         <AgentCard icon={Users} title="Candidate Screening" badge="GitHub Verified"
@@ -451,13 +600,14 @@ export default function AIAgentsPage() {
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4 flex items-center gap-2">
           <GitBranch className="h-3.5 w-3.5" /> LangGraph Architecture
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 text-xs text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs text-center">
           {[
             { name: "Resume Improve", nodes: "5 nodes", loop: "✓ Loop", color: "#7c3aed" },
             { name: "Candidate Screen", nodes: "4 nodes", loop: "GitHub API", color: "#22c55e" },
             { name: "Learning Path", nodes: "3 nodes", loop: "Resources", color: "#8b5cf6" },
             { name: "Panel Interview", nodes: "4 nodes", loop: "3 Agents", color: "#f59e0b" },
             { name: "Market Intel", nodes: "3 nodes", loop: "Salary Data", color: "#3b82f6" },
+            { name: "Daily Ops", nodes: "2 nodes", loop: "Paste context", color: "#06b6d4" },
           ].map((a) => (
             <div key={a.name} className="rounded-lg border p-3 space-y-1" style={{ borderColor: a.color + "40" }}>
               <div className="font-semibold" style={{ color: a.color }}>{a.name}</div>

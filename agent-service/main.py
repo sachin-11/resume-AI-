@@ -165,7 +165,7 @@ if __name__ == "__main__":
 
 
 # ═══════════════════════════════════════════════════════════════
-# NEW AGENTS — 5 Advanced LangGraph Agents
+# NEW AGENTS — Advanced LangGraph Agents (+ Daily Ops)
 # ═══════════════════════════════════════════════════════════════
 
 from agents.interview_evaluator.graph import interview_evaluator_agent
@@ -173,6 +173,7 @@ from agents.candidate_screening.graph import candidate_screening_agent
 from agents.learning_path.graph import learning_path_agent
 from agents.interview_panel.graph import interview_panel_agent
 from agents.market_intelligence.graph import market_intelligence_agent
+from agents.daily_ops.graph import daily_ops_agent
 
 
 # ── Agent 1: Interview Evaluator ─────────────────────────────────
@@ -397,6 +398,47 @@ async def market_intelligence(
     }
 
 
+# ── Agent 6: Daily Ops (productivity digest) ─────────────────────
+class DailyOpsRequest(BaseModel):
+    task_type: str = "morning_summary"
+    user_context: str
+    optional_focus: Optional[str] = None
+
+
+@app.post("/daily-ops")
+async def daily_ops(
+    request: DailyOpsRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """
+    Summaries, standups, inbox digests from pasted text.
+    Connectors (Gmail API, etc.) are optional; paste exports or threads here.
+    """
+    verify_secret(x_agent_secret)
+
+    if not request.user_context or len(request.user_context.strip()) < 12:
+        raise HTTPException(status_code=400, detail="user_context required (paste emails, notes, tickets, etc.)")
+
+    if not os.getenv("OPENAI_API_KEY") and not os.getenv("GROQ_API_KEY"):
+        raise HTTPException(status_code=503, detail="No AI provider configured")
+
+    initial_state = {
+        "task_type": request.task_type,
+        "user_context": request.user_context,
+        "optional_focus": request.optional_focus or "",
+        "draft_json": {},
+        "report": {},
+        "logs": [],
+    }
+
+    final_state = await daily_ops_agent.ainvoke(initial_state)
+    return {
+        "success": True,
+        "report": final_state.get("report", {}),
+        "logs": final_state.get("logs", []),
+    }
+
+
 # ── Graph info for all agents ─────────────────────────────────────
 @app.get("/agents")
 def list_agents():
@@ -408,5 +450,6 @@ def list_agents():
             {"name": "learning-path",        "endpoint": "/generate-learning-path","description": "Personalized adaptive learning plan"},
             {"name": "interview-panel",      "endpoint": "/panel-interview",       "description": "3-agent panel: Technical + HR + Domain"},
             {"name": "market-intelligence",  "endpoint": "/market-intelligence",   "description": "Salary, demand score, skill gap analysis"},
+            {"name": "daily-ops",            "endpoint": "/daily-ops",             "description": "Morning brief, standup, Gmail/Slack-style digests from pasted context"},
         ]
     }
