@@ -70,21 +70,30 @@ export function rateLimit(
 // ── Preset configs ───────────────────────────────────────────────
 export const RATE_LIMITS = {
   // Public interview endpoints — generous but protected
-  publicInterview: { limit: 30, windowMs: 60 * 1000 },       // 30/min per IP
-  publicAnswer:    { limit: 60, windowMs: 60 * 1000 },        // 60/min per IP
-  publicComplete:  { limit: 10, windowMs: 60 * 1000 },        // 10/min per IP
-  publicPhoto:     { limit: 5,  windowMs: 60 * 1000 },        // 5/min per IP
-  tabSwitch:       { limit: 100, windowMs: 60 * 1000 },       // 100/min per IP
+  publicInterview: { limit: 30,  windowMs: 60 * 1000 },            // 30/min per IP
+  publicAnswer:    { limit: 60,  windowMs: 60 * 1000 },            // 60/min per IP
+  publicComplete:  { limit: 10,  windowMs: 60 * 1000 },            // 10/min per IP
+  publicPhoto:     { limit: 5,   windowMs: 60 * 1000 },            // 5/min per IP
+  tabSwitch:       { limit: 100, windowMs: 60 * 1000 },            // 100/min per IP
 
-  // Auth endpoints — strict
-  login:           { limit: 10, windowMs: 15 * 60 * 1000 },   // 10 per 15min
-  register:        { limit: 5,  windowMs: 60 * 60 * 1000 },   // 5 per hour
+  // Auth — strict (by IP, pre-login)
+  login:           { limit: 10,  windowMs: 15 * 60 * 1000 },       // 10 per 15 min
+  register:        { limit: 5,   windowMs: 60 * 60 * 1000 },       // 5 per hour
+  forgotPassword:  { limit: 5,   windowMs: 60 * 60 * 1000 },       // 5 per hour
+  resetPassword:   { limit: 10,  windowMs: 60 * 60 * 1000 },       // 10 per hour
+  changePassword:  { limit: 5,   windowMs: 15 * 60 * 1000 },       // 5 per 15 min (by userId)
+  otpVerify:       { limit: 10,  windowMs: 15 * 60 * 1000 },       // 10 per 15 min per IP
 
   // Candidate auth
-  candidateAuth:   { limit: 10, windowMs: 15 * 60 * 1000 },   // 10 per 15min
+  candidateAuth:   { limit: 10,  windowMs: 15 * 60 * 1000 },       // 10 per 15 min
 
   // Invite booking
-  bookSlot:        { limit: 5,  windowMs: 60 * 1000 },        // 5/min per IP
+  bookSlot:        { limit: 5,   windowMs: 60 * 1000 },            // 5/min per IP
+
+  // Expensive authenticated routes (by userId)
+  fetchJobs:       { limit: 10,  windowMs: 60 * 60 * 1000 },       // 10 per hour
+  resumeUpload:    { limit: 10,  windowMs: 60 * 60 * 1000 },       // 10 per hour
+  aiGenerate:      { limit: 20,  windowMs: 60 * 60 * 1000 },       // 20 per hour (feedback, improve)
 } as const;
 
 // ── Helper: get IP from Next.js request ─────────────────────────
@@ -114,4 +123,12 @@ export function rateLimitResponse(result: RateLimitResult): Response {
       },
     }
   );
+}
+
+// ── One-liner helper — returns 429 Response or null ──────────────
+// Usage: const limited = checkRateLimit(getIP(req), RATE_LIMITS.forgotPassword);
+//        if (limited) return limited;
+export function checkRateLimit(identifier: string, config: RateLimitConfig): Response | null {
+  const result = rateLimit(identifier, config);
+  return result.success ? null : rateLimitResponse(result);
 }

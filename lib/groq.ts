@@ -88,13 +88,14 @@ function isRateLimitError(err: unknown): boolean {
 
 function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  const e = err as Error & { status?: number };
+  const e = err as Error & { status?: number; name?: string };
   return (
+    e.name === "AbortError" ||
     e.status === 500 ||
     e.status === 502 ||
     e.status === 503 ||
     e.status === 504 ||
-    /timeout|network|ECONNREFUSED|ENOTFOUND|fetch/i.test(e.message ?? "")
+    /timeout|network|ECONNREFUSED|ENOTFOUND|fetch|aborted/i.test(e.message ?? "")
   );
 }
 
@@ -110,15 +111,18 @@ async function callGroqDirect(
   userPrompt: string,
   model = "llama-3.3-70b-versatile"
 ): Promise<string> {
-  const completion = await getGroq().chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.7,
-    max_tokens: 4096,
-  });
+  const completion = await getGroq().chat.completions.create(
+    {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 4096,
+    },
+    { signal: AbortSignal.timeout(TIMEOUT_MS) }
+  );
   return completion.choices[0]?.message?.content ?? "";
 }
 
@@ -181,7 +185,7 @@ export async function callGroq(
         // Groq rate limit — cooldown and switch to OpenAI
         groqUnavailableUntil = Date.now() + GROQ_COOLDOWN_MS;
         console.warn(`[AI] Groq rate limit hit — switching to OpenAI for ${GROQ_COOLDOWN_MS / 60000} min`);
-        sendSwitchAlert("Groq", "OpenAI", `Rate limit: ${reason}`); // non-blocking
+        void sendSwitchAlert("Groq", "OpenAI", `Rate limit: ${reason}`);
       } else if (isTransientError(err)) {
         // Groq transient error — try OpenAI immediately
         console.warn("[AI] Groq transient error — trying OpenAI:", reason);
@@ -239,25 +243,100 @@ export async function callGroq(
 }
 
 // ── Stream version (for real-time responses) ─────────────────────
+// Returns an async iterable of text chunks regardless of provider
 export async function callGroqStream(
   systemPrompt: string,
   userPrompt: string,
   model = "llama-3.3-70b-versatile"
-) {
-  // Stream always uses Groq (streaming with OpenAI needs different handling)
-  if (!process.env.GROQ_API_KEY) {
-    throw new Error("GROQ_API_KEY is not configured for streaming");
+): Promise<AsyncIterable<string>> {
+  const now = Date.now();
+  const groqAvailable = !!process.env.GROQ_API_KEY && now > groqUnavailableUntil;
+
+  // Try Groq streaming first
+  if (groqAvailable) {
+    try {
+      const stream = await getGroq().chat.completions.create(
+        {
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.7,
+          max_tokens: 2048,
+          stream: true,
+        },
+        { signal: AbortSignal.timeout(TIMEOUT_MS) }
+      );
+
+      return (async function* () {
+        for await (const chunk of stream) {
+          const text = chunk.choices[0]?.delta?.content ?? "";
+          if (text) yield text;
+        }
+      })();
+    } catch (err) {
+      const reason = (err as Error).message ?? "Unknown";
+      if (isRateLimitError(err)) {
+        groqUnavailableUntil = Date.now() + GROQ_COOLDOWN_MS;
+        void sendSwitchAlert("Groq", "OpenAI", `Stream rate limit: ${reason}`);
+      }
+      console.warn("[AI] Groq stream failed, falling back to OpenAI:", reason);
+    }
   }
-  return getGroq().chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.7,
-    max_tokens: 2048,
-    stream: true,
+
+  // OpenAI streaming fallback
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("All AI providers unavailable for streaming. Set GROQ_API_KEY or OPENAI_API_KEY.");
+  }
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 2048,
+      stream: true,
+    }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`OpenAI stream error ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+
+  return (async function* () {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const lines = decoder.decode(value).split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+          try {
+            const json = JSON.parse(line.slice(6));
+            const text = json.choices?.[0]?.delta?.content ?? "";
+            if (text) yield text;
+          } catch {
+            // skip malformed SSE lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  })();
 }
 
 // ── Provider status (for debugging/admin) ────────────────────────

@@ -72,7 +72,8 @@ export default function AutoApplyPage() {
   });
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
-  const [fetchResult, setFetchResult] = useState<{ found: number; matched: number; source: string } | null>(null);
+  const [fetchResult, setFetchResult] = useState<{ found: number; matched: number; skipped: number; source: string } | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [activeFilter, setActiveFilter] = useState("found");
@@ -122,7 +123,7 @@ export default function AutoApplyPage() {
 
   async function runFetch() {
     if (!settings.targetRole) { setShowSettings(true); return; }
-    setFetching(true); setFetchResult(null);
+    setFetching(true); setFetchResult(null); setFetchError(null);
     try {
       const res = await fetch("/api/auto-apply/fetch-jobs", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -135,12 +136,21 @@ export default function AutoApplyPage() {
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setFetchResult(data);
-        fetchAll();
+      if (!res.ok) {
+        setFetchError(data.error ?? "Failed to fetch jobs. Please try again.");
+        return;
       }
+      setFetchResult(data);
+      // Auto-switch to the tab that has results
+      if ((data.matched ?? 0) > 0) {
+        setActiveFilter("found");
+      } else if ((data.skipped ?? 0) > 0) {
+        setActiveFilter("skipped");
+      }
+      fetchAll();
     } catch (err) {
       console.error("[AUTO_APPLY] runFetch error:", err);
+      setFetchError("Network error. Please check your connection and try again.");
     } finally {
       setFetching(false);
     }
@@ -297,17 +307,39 @@ export default function AutoApplyPage() {
         ))}
       </div>
 
+      {/* Fetch error banner */}
+      {fetchError && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 flex items-center gap-3">
+          <XCircle className="h-5 w-5 text-red-400 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-red-400">Fetch failed</p>
+            <p className="text-xs text-muted-foreground">{fetchError}</p>
+          </div>
+          <button onClick={() => setFetchError(null)} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
+        </div>
+      )}
+
       {/* Fetch result banner */}
       {fetchResult && (
-        <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-4 flex items-center gap-3">
-          <CheckCircle2 className="h-5 w-5 text-green-400 shrink-0" />
-          <div>
-            <p className="text-sm font-semibold text-green-400">Jobs fetched!</p>
-            <p className="text-xs text-muted-foreground">
-              Found {fetchResult.found} jobs · {fetchResult.matched} match your criteria
-              {fetchResult.source === "mock" && " (demo data — add JSEARCH_API_KEY for real jobs)"}
+        <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-4 flex items-start gap-3">
+          <CheckCircle2 className="h-5 w-5 text-green-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-green-400">Jobs fetched successfully!</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {fetchResult.found} new jobs saved ·{" "}
+              <span className="text-blue-400 font-medium">{fetchResult.matched} matched</span> ·{" "}
+              {fetchResult.skipped ?? 0} below score threshold
+              {fetchResult.source === "mock" && (
+                <span className="ml-1 text-yellow-400">(demo data — add JSEARCH_API_KEY for real jobs)</span>
+              )}
             </p>
+            {!settings.resumeId && (
+              <p className="text-xs text-yellow-400 mt-1">
+                Tip: Select a resume in Configure for AI-powered match scoring
+              </p>
+            )}
           </div>
+          <button onClick={() => setFetchResult(null)} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
         </div>
       )}
 
@@ -331,9 +363,13 @@ export default function AutoApplyPage() {
         <div className="rounded-xl border border-dashed border-border p-12 text-center space-y-3">
           <Briefcase className="h-10 w-10 text-muted-foreground/30 mx-auto" />
           <p className="text-muted-foreground text-sm">
-            {activeFilter === "found" ? "No matched jobs yet. Click \"Fetch New Jobs\" to start." : `No ${STATUS_CONFIG[activeFilter]?.label} jobs.`}
+            {activeFilter === "found"
+              ? 'No matched jobs yet. Click "Fetch New Jobs" to start.'
+              : activeFilter === "skipped"
+              ? `No low-match jobs. ${(stats.found ?? 0) > 0 ? "Switch to Matched tab to see your jobs." : 'Click "Fetch New Jobs" to fetch jobs.'}`
+              : `No ${STATUS_CONFIG[activeFilter]?.label} jobs yet.`}
           </p>
-          {activeFilter === "found" && (
+          {(activeFilter === "found" || activeFilter === "skipped") && (
             <Button onClick={runFetch} disabled={fetching} className="gap-2">
               <Zap className="h-4 w-4" /> Fetch Jobs Now
             </Button>

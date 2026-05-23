@@ -8,30 +8,35 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { searchParams } = new URL(req.url);
-  const status = searchParams.get("status");
-  const limit = Math.min(Number(searchParams.get("limit") ?? 50), 100);
+    const { searchParams } = new URL(req.url);
+    const status = searchParams.get("status");
+    const limit = Math.min(Number(searchParams.get("limit") ?? 50), 100);
 
-  const jobs = await db.autoApplyJob.findMany({
-    where: {
-      userId: session.user.id,
-      ...(status ? { status } : {}),
-    },
-    orderBy: [{ matchScore: "desc" }, { createdAt: "desc" }],
-    take: limit,
-  });
+    const jobs = await db.autoApplyJob.findMany({
+      where: {
+        userId: session.user.id,
+        ...(status ? { status } : {}),
+      },
+      orderBy: [{ matchScore: "desc" }, { createdAt: "desc" }],
+      take: limit,
+    });
 
-  // Stats
-  const stats = await db.autoApplyJob.groupBy({
-    by: ["status"],
-    where: { userId: session.user.id },
-    _count: true,
-  });
+    // Stats
+    const stats = await db.autoApplyJob.groupBy({
+      by: ["status"],
+      where: { userId: session.user.id },
+      _count: true,
+    });
 
-  const statsMap = Object.fromEntries(stats.map((s) => [s.status, s._count]));
+    const statsMap = Object.fromEntries(stats.map((s) => [s.status, s._count]));
 
-  return NextResponse.json({ jobs, stats: statsMap });
+    return NextResponse.json({ jobs, stats: statsMap });
+  } catch (err) {
+    console.error("[AUTO_APPLY_JOBS_GET]", err);
+    return NextResponse.json({ error: "Failed to fetch jobs" }, { status: 500 });
+  }
 }

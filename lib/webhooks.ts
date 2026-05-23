@@ -97,6 +97,47 @@ function toATSPayload(payload: WebhookPayload): object {
   };
 }
 
+// ── Fire one webhook ─────────────────────────────────────────────
+async function fireWebhook(
+  wh: { name: string; type: string; url: string; secret: string | null },
+  event: WebhookEvent,
+  payload: WebhookPayload
+): Promise<void> {
+  let body: string;
+
+  if (wh.type === "slack") {
+    body = JSON.stringify(toSlackMessage(payload));
+  } else if (["greenhouse", "lever", "workday"].includes(wh.type)) {
+    body = JSON.stringify(toATSPayload(payload));
+  } else {
+    body = JSON.stringify(payload);
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": "AI-Resume-Coach/1.0",
+    "X-Webhook-Event": event,
+    "X-Webhook-Timestamp": payload.timestamp,
+  };
+
+  if (wh.secret) {
+    headers["X-Webhook-Signature"] = `sha256=${signPayload(body, wh.secret)}`;
+  }
+
+  const res = await fetch(wh.url, {
+    method: "POST",
+    headers,
+    body,
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (!res.ok) {
+    console.error(`[WEBHOOK] ${wh.name} (${wh.type}) failed: ${res.status}`);
+  } else {
+    console.log(`[WEBHOOK] ${wh.name} → ${event} delivered`);
+  }
+}
+
 // ── Main dispatcher ──────────────────────────────────────────────
 export async function dispatchWebhooks(
   userId: string,
@@ -104,47 +145,47 @@ export async function dispatchWebhooks(
   payload: WebhookPayload
 ): Promise<void> {
   const webhooks = await db.webhookConfig.findMany({
-    where: {
-      userId,
-      isActive: true,
-      events: { has: event },
-    },
+    where: { userId, isActive: true, events: { has: event } },
   });
 
   if (webhooks.length === 0) return;
 
   await Promise.allSettled(
-    webhooks.map(async (wh) => {
-      try {
-        let body: string;
+    webhooks.map((wh) => fireWebhook(wh, event, payload).catch((e) =>
+      console.error(`[WEBHOOK] ${wh.name} error:`, e)
+    ))
+  );
+}
 
-        if (wh.type === "slack") {
-          body = JSON.stringify(toSlackMessage(payload));
-        } else if (["greenhouse", "lever", "workday"].includes(wh.type)) {
-          body = JSON.stringify(toATSPayload(payload));
-        } else {
-          // custom — send raw payload
-          body = JSON.stringify(payload);
-        }
+// ── Score threshold dispatcher ───────────────────────────────────
+// Fires score_threshold_crossed for each webhook where score >= webhook.scoreThreshold
+export async function dispatchScoreThresholdWebhooks(
+  userId: string,
+  overallScore: number,
+  payload: WebhookPayload
+): Promise<void> {
+  const webhooks = await db.webhookConfig.findMany({
+    where: {
+      userId,
+      isActive: true,
+      events: { has: "score_threshold_crossed" },
+      scoreThreshold: { not: null },
+    },
+  });
 
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-          "User-Agent": "AI-Resume-Coach/1.0",
-          "X-Webhook-Event": event,
-          "X-Webhook-Timestamp": payload.timestamp,
-        };
+  const triggered = webhooks.filter(
+    (wh) => wh.scoreThreshold !== null && overallScore >= wh.scoreThreshold
+  );
 
-        if (wh.secret) {
-          headers["X-Webhook-Signature"] = `sha256=${signPayload(body, wh.secret)}`;
-        }
+  if (triggered.length === 0) return;
 
-        const res = await fetch(wh.url, { method: "POST", headers, body });
-        if (!res.ok) {
-          console.error(`[WEBHOOK] ${wh.name} failed: ${res.status}`);
-        }
-      } catch (err) {
-        console.error(`[WEBHOOK] ${wh.name} error:`, err);
-      }
-    })
+  const thresholdPayload: WebhookPayload = { ...payload, event: "score_threshold_crossed" };
+
+  await Promise.allSettled(
+    triggered.map((wh) =>
+      fireWebhook(wh, "score_threshold_crossed", thresholdPayload).catch((e) =>
+        console.error(`[WEBHOOK] ${wh.name} threshold error:`, e)
+      )
+    )
   );
 }

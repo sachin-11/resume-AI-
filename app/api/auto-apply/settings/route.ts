@@ -20,13 +20,18 @@ const schema = z.object({
 });
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const settings = await db.autoApplySettings.findUnique({
-    where: { userId: session.user.id },
-  });
-  return NextResponse.json({ settings });
+    const settings = await db.autoApplySettings.findUnique({
+      where: { userId: session.user.id },
+    });
+    return NextResponse.json({ settings });
+  } catch (err) {
+    console.error("[AUTO_APPLY_SETTINGS_GET]", err);
+    return NextResponse.json({ error: "Failed to fetch settings" }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {

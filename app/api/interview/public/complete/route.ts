@@ -6,7 +6,7 @@ import { safeJsonParse } from "@/lib/utils";
 import { FeedbackReport } from "@/types";
 import { MOCK_FEEDBACK } from "@/lib/mockData";
 import { sendRecruiterAlert, sendScoreReport } from "@/lib/mailer";
-import { dispatchWebhooks } from "@/lib/webhooks";
+import { dispatchWebhooks, dispatchScoreThresholdWebhooks } from "@/lib/webhooks";
 import type { WebhookPayload } from "@/lib/webhooks";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
 
@@ -137,6 +137,33 @@ export async function POST(req: NextRequest) {
         weakAreas: feedback.weakAreas,
         summary: feedback.summary,
       }).catch((e) => console.error("[SCORE_REPORT]", e));
+    }
+
+    // ── Fire webhooks (non-blocking) ──────────────────────────
+    if (invite?.campaign?.userId) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+      const webhookPayload: WebhookPayload = {
+        event: "interview_completed",
+        timestamp: new Date().toISOString(),
+        data: {
+          candidateName: invite.name ?? invite.email,
+          candidateEmail: invite.email,
+          role: invite.campaign.role,
+          campaignTitle: invite.campaign.title,
+          overallScore: feedback.overallScore,
+          technicalScore: feedback.technicalScore,
+          communicationScore: feedback.communicationScore,
+          confidenceScore: feedback.confidenceScore,
+          tabSwitchCount: interviewSession.tabSwitchCount ?? 0,
+          passed: feedback.overallScore >= 60,
+          shortlisted: false,
+          dashboardUrl: `${appUrl}/campaigns`,
+          sessionId,
+        },
+      };
+
+      void dispatchWebhooks(invite.campaign.userId, "interview_completed", webhookPayload);
+      void dispatchScoreThresholdWebhooks(invite.campaign.userId, feedback.overallScore, webhookPayload);
     }
 
     return NextResponse.json({ success: true });

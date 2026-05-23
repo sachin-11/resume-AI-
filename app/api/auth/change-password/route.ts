@@ -3,11 +3,16 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
+import { checkRateLimit, getIP, RATE_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    // Rate limit by userId — prevents brute-forcing current password
+    const limited = checkRateLimit(`cp:${session.user.id}`, RATE_LIMITS.changePassword);
+    if (limited) return limited;
 
     const { currentPassword, newPassword } = await req.json();
     if (!currentPassword || !newPassword) return NextResponse.json({ error: "Both fields required" }, { status: 400 });

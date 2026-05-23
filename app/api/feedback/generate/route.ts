@@ -8,6 +8,7 @@ import { safeJsonParse } from "@/lib/utils";
 import { FeedbackReport } from "@/types";
 import { MOCK_FEEDBACK } from "@/lib/mockData";
 import { buildFeedbackRAGContext } from "@/lib/rag";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,6 +16,9 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const limited = checkRateLimit(`fg:${session.user.id}`, RATE_LIMITS.aiGenerate);
+    if (limited) return limited;
 
     const { sessionId, hintPenalty = 0 } = await req.json();
 

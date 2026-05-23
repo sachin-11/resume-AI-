@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { extractTextFromFile } from "@/lib/fileParser";
 import { indexResume } from "@/lib/rag";
 import { matchAllResumes } from "@/lib/resumeMatcher";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,6 +13,9 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const limited = checkRateLimit(`ru:${session.user.id}`, RATE_LIMITS.resumeUpload);
+    if (limited) return limited;
 
     const formData = await req.formData();
     const file = formData.get("file") as File | null;

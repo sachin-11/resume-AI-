@@ -17,6 +17,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  try {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -102,4 +103,8 @@ export async function POST(
     status: newStatus,
     job: updated,
   });
+  } catch (err) {
+    console.error("[ONE_CLICK_APPLY]", err);
+    return NextResponse.json({ error: "Apply failed. Please try again." }, { status: 500 });
+  }
 }

@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { checkRateLimit, getIP, RATE_LIMITS } from "@/lib/rate-limit";
 
 // Verifies OTP without marking it used — used during registration flow
 // The OTP is marked used only after successful account creation
 export async function POST(req: NextRequest) {
+  const limited = checkRateLimit(getIP(req), RATE_LIMITS.otpVerify);
+  if (limited) return limited;
+
   try {
     const { phone, code } = await req.json();
 
