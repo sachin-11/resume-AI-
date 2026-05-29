@@ -3,6 +3,7 @@
  * Generates 3-tone LinkedIn DM messages for referral/intro outreach
  */
 import { NextRequest, NextResponse } from "next/server";
+export const maxDuration = 60;
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";

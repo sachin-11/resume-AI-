@@ -8,6 +8,8 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { generateATSScore } from "@/lib/jobAgent";
 
+export const maxDuration = 60;
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

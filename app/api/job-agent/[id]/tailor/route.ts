@@ -3,6 +3,7 @@
  * AI rewrites resume bullets to match the JD
  */
 import { NextRequest, NextResponse } from "next/server";
+export const maxDuration = 60;
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
