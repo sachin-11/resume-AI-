@@ -8,7 +8,7 @@ import {
   BarChart3, Settings, LogOut, Brain, ChevronRight,
   User, Users, Shield, BookOpen, Zap, CreditCard,
   Sparkles, Headphones, Menu, X, Sun, Moon,
-  Briefcase, Bot, Wand2, Home,
+  Briefcase, Bot, Wand2, Home, Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ const CANDIDATE_NAV = [
   { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones },
   { href: "/history",           label: "Interview History", icon: BarChart3 },
   { href: "/job-agent",         label: "Job Agent",         icon: Briefcase },
+  { href: "/job-match-agent",   label: "Job Match Agent",   icon: Target },
   { href: "/auto-apply",        label: "Auto Apply Agent",  icon: Zap },
   { href: "/ai-agents",         label: "AI Agents Hub",     icon: Bot },
   { href: "/settings",          label: "Settings",          icon: Settings },
@@ -57,6 +58,7 @@ const ADMIN_NAV = [
   { href: "/interview/copilot", label: "AI Copilot",        icon: Headphones },
   { href: "/history",           label: "Interview History", icon: BarChart3 },
   { href: "/job-agent",         label: "Job Agent",         icon: Briefcase },
+  { href: "/job-match-agent",   label: "Job Match Agent",   icon: Target },
   { href: "/auto-apply",        label: "Auto Apply Agent",  icon: Zap },
   // Recruiter tools
   { href: "/campaigns",         label: "Bulk Interviews",   icon: Users },

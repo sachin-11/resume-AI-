@@ -174,6 +174,7 @@ from agents.learning_path.graph import learning_path_agent
 from agents.interview_panel.graph import interview_panel_agent
 from agents.market_intelligence.graph import market_intelligence_agent
 from agents.daily_ops.graph import daily_ops_agent
+from agents.job_match.graph import job_match_agent
 
 
 # ── Agent 1: Interview Evaluator ─────────────────────────────────
@@ -451,5 +452,69 @@ def list_agents():
             {"name": "interview-panel",      "endpoint": "/panel-interview",       "description": "3-agent panel: Technical + HR + Domain"},
             {"name": "market-intelligence",  "endpoint": "/market-intelligence",   "description": "Salary, demand score, skill gap analysis"},
             {"name": "daily-ops",            "endpoint": "/daily-ops",             "description": "Morning brief, standup, Gmail/Slack-style digests from pasted context"},
+            {"name": "job-match",            "endpoint": "/job-match-agent",       "description": "Deep JD fit analysis, mock interview, salary intel, application strategy"},
         ]
+    }
+
+
+# ── Agent 7: Job Match ────────────────────────────────────────────
+class JobMatchRequest(BaseModel):
+    resume_text: str
+    job_description: str
+    resume_id: str = ""
+    user_id: str = ""
+
+
+@app.post("/job-match-agent")
+async def run_job_match(
+    request: JobMatchRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """
+    Deep job match analysis agent.
+
+    Nodes: parse_jd → deep_match → mock_interview → salary_insight → strategy → build_report
+
+    Returns: fit score, JD intelligence, competitive gaps, mock interview Q&A,
+             salary range, negotiation tip, application strategy.
+    """
+    verify_secret(x_agent_secret)
+
+    if len(request.resume_text.strip()) < 50:
+        raise HTTPException(status_code=400, detail="resume_text too short")
+    if len(request.job_description.strip()) < 50:
+        raise HTTPException(status_code=400, detail="job_description too short")
+
+    initial_state = {
+        "resume_text":     request.resume_text,
+        "job_description": request.job_description,
+        "resume_id":       request.resume_id,
+        "user_id":         request.user_id,
+        # Node 1 outputs
+        "jd_title": "", "jd_company": "",
+        "jd_must_have": [], "jd_nice_to_have": [],
+        "jd_responsibilities": [], "jd_red_flags": [], "jd_culture_signals": [],
+        # Node 2 outputs
+        "fit_score": 0, "fit_verdict": "stretch",
+        "competitive_edge": [], "critical_gaps": [], "optional_gaps": [], "match_summary": "",
+        # Node 3 outputs
+        "mock_questions": [],
+        # Node 4 outputs
+        "salary_min": 0, "salary_max": 0, "salary_currency": "INR",
+        "salary_factors": [], "negotiation_tip": "",
+        # Node 5 outputs
+        "application_strategy": "", "timing_advice": "",
+        "referral_tips": [], "linkedin_tips": [],
+        "application_dos": [], "application_donts": [],
+        # Final
+        "final_report": {},
+        "logs": [],
+    }
+
+    final_state = await job_match_agent.ainvoke(initial_state)
+
+    return {
+        "success": True,
+        "report": final_state.get("final_report", {}),
+        "logs": final_state.get("logs", []),
     }
