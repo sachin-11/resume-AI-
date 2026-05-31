@@ -106,6 +106,7 @@ export default function AIAgentsPage() {
 
   // Agent states
   const [screeningJD, setScreeningJD] = useState("");
+  const [screeningGithub, setScreeningGithub] = useState("");
   const [screeningLoading, setScreeningLoading] = useState(false);
   const [screeningResult, setScreeningResult] = useState<Record<string, unknown> | null>(null);
   const [screeningLogs, setScreeningLogs] = useState<string[]>([]);
@@ -156,7 +157,11 @@ export default function AIAgentsPage() {
     clearError("screening"); setScreeningLoading(true); setScreeningResult(null);
     const res = await fetch("/api/agents/screen-candidate", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resumeId: selectedResume, jobDescription: screeningJD }),
+      body: JSON.stringify({ 
+        resumeId: selectedResume, 
+        jobDescription: screeningJD,
+        githubUsername: screeningGithub.trim() || undefined
+      }),
     });
     const data = await res.json();
     setScreeningLoading(false);
@@ -431,6 +436,14 @@ export default function AIAgentsPage() {
             <textarea rows={3} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
               placeholder="Paste job description here..."
               value={screeningJD} onChange={e => setScreeningJD(e.target.value)} />
+            
+            <div className="space-y-1">
+              <label className="text-[10px] font-semibold text-muted-foreground uppercase">GitHub Username (Optional Override)</label>
+              <input className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                placeholder="e.g. sachin-11 (overrides resume)"
+                value={screeningGithub} onChange={e => setScreeningGithub(e.target.value)} />
+            </div>
+
             {errors.screening && <p className="text-red-400 text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3" />{errors.screening}</p>}
             <Button onClick={runScreening} disabled={screeningLoading} className="w-full gap-2 bg-green-600 hover:bg-green-700">
               {screeningLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Screening...</> : <><Users className="h-4 w-4" />Screen Candidate</>}
