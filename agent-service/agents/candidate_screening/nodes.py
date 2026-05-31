@@ -110,7 +110,10 @@ async def fetch_github_data(state: dict) -> dict:
     # Standard HTTP API fallback
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            headers = {"Accept": "application/vnd.github.v3+json"}
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "Resume-AI-Coach-Agent"
+            }
             if token:
                 headers["Authorization"] = f"token {token}"
                 

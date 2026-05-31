@@ -45,77 +45,64 @@ export async function POST(req: NextRequest) {
       resumeText = resume?.rawText ?? "";
     }
 
-    // Fetch jobs from JSearch
-    const { jobs, source } = await searchJobs({
-      query: targetRole,
-      location: location ?? "India",
-      numPages: Math.ceil(limit / 10),
-      datePosted: "week",
+    // 🚀 Call Python LangGraph Auto Apply Agent!
+    const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
+    const AGENT_SECRET = process.env.AGENT_SECRET ?? "dev-secret-change-in-production";
+
+    const agentRes = await fetch(`${AGENT_URL}/auto-apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-agent-secret": AGENT_SECRET },
+      body: JSON.stringify({
+        resume_text: resumeText || "Basic developer profile with React and Node.js skills.",
+        target_role: targetRole,
+        location: location ?? "India",
+        min_match_score: minMatchScore,
+        limit: Number(limit)
+      }),
+      signal: AbortSignal.timeout(90_000),
     });
 
-    if (jobs.length === 0) {
-      return NextResponse.json({ found: 0, matched: 0, source });
+    if (!agentRes.ok) {
+      throw new Error(`FastAPI Agent returned status ${agentRes.status}`);
     }
 
-    // Match each job against resume (parallel, max 3 at a time to avoid rate limits)
+    const agentData = await agentRes.json();
+    const agentJobs = agentData.found_jobs ?? [];
+
+    if (agentJobs.length === 0) {
+      return NextResponse.json({ found: 0, matched: 0, source: "mcp-agent" });
+    }
+
+    // Save fetched jobs to Prisma PostgreSQL Database
     const results = [];
-    const BATCH = 3;
+    for (const job of agentJobs) {
+      // Avoid duplicate listings
+      const existing = await db.autoApplyJob.findFirst({
+        where: { userId: session.user.id, jobUrl: job.jobUrl },
+        select: { id: true },
+      });
+      if (existing) continue;
 
-    for (let i = 0; i < Math.min(jobs.length, limit); i += BATCH) {
-      const batch = jobs.slice(i, i + BATCH);
-      const batchResults = await Promise.all(
-        batch.map(async (job) => {
-          // Skip duplicates
-          const existing = await db.autoApplyJob.findFirst({
-            where: { userId: session.user.id, externalId: job.job_id },
-            select: { id: true },
-          });
-          if (existing) return null;
-
-          let matchScore = 0;
-          let matchedSkills: string[] = [];
-          let missingSkills: string[] = [];
-
-          if (resumeText && job.job_description) {
-            // AI-powered match when resume is available
-            try {
-              const gap = await analyzeGap(resumeText, job.job_description);
-              matchScore = gap.matchScore;
-              matchedSkills = gap.matchedSkills;
-              missingSkills = gap.missingSkills;
-            } catch {
-              matchScore = basicTitleScore(job.job_title, targetRole);
-            }
-          } else {
-            // No resume — use keyword-based title score so jobs still appear
-            matchScore = basicTitleScore(job.job_title, targetRole);
-            matchedSkills = job.job_required_skills?.slice(0, 5) ?? [];
-          }
-
-          const saved = await db.autoApplyJob.create({
-            data: {
-              userId: session.user.id,
-              resumeId: resumeId ?? null,
-              jobTitle: job.job_title,
-              company: job.employer_name,
-              location: [job.job_city, job.job_country].filter(Boolean).join(", "),
-              jobUrl: job.job_apply_link,
-              jobDescription: job.job_description?.slice(0, 5000) ?? "",
-              salary: formatSalary(job),
-              jobType: job.job_employment_type,
-              source: "jsearch",
-              externalId: job.job_id,
-              matchScore,
-              matchedSkills,
-              missingSkills,
-              status: matchScore >= minMatchScore ? "found" : "skipped",
-            },
-          });
-
-          return { ...saved, isNew: true };
-        })
-      );
-      results.push(...batchResults.filter(Boolean));
+      const saved = await db.autoApplyJob.create({
+        data: {
+          userId: session.user.id,
+          resumeId: resumeId ?? null,
+          jobTitle: job.jobTitle,
+          company: job.company,
+          location: job.location,
+          jobUrl: job.jobUrl,
+          jobDescription: job.description?.slice(0, 5000) ?? "",
+          salary: job.salary ?? "Not disclosed",
+          jobType: job.jobType ?? "Full-time",
+          source: "mcp-agent",
+          externalId: job.jobUrl ?? String(Math.random()),
+          matchScore: job.matchScore,
+          matchedSkills: job.matchedSkills,
+          missingSkills: job.missingSkills,
+          status: job.status,
+        },
+      });
+      results.push({ ...saved, isNew: true });
     }
 
     const matched = results.filter((r) => r && r.status === "found").length;
@@ -130,7 +117,7 @@ export async function POST(req: NextRequest) {
       found: results.length,
       matched,
       skipped: results.length - matched,
-      source,
+      source: "mcp-agent",
       jobs: results.filter((r) => r && r.status === "found"),
     });
   } catch (err) {

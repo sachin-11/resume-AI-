@@ -175,6 +175,7 @@ from agents.interview_panel.graph import interview_panel_agent
 from agents.market_intelligence.graph import market_intelligence_agent
 from agents.daily_ops.graph import daily_ops_agent
 from agents.job_match.graph import job_match_agent
+from agents.auto_apply.graph import auto_apply_agent
 
 
 # ── Agent 1: Interview Evaluator ─────────────────────────────────
@@ -453,6 +454,7 @@ def list_agents():
             {"name": "market-intelligence",  "endpoint": "/market-intelligence",   "description": "Salary, demand score, skill gap analysis"},
             {"name": "daily-ops",            "endpoint": "/daily-ops",             "description": "Morning brief, standup, Gmail/Slack-style digests from pasted context"},
             {"name": "job-match",            "endpoint": "/job-match-agent",       "description": "Deep JD fit analysis, mock interview, salary intel, application strategy"},
+            {"name": "auto-apply",           "endpoint": "/auto-apply",             "description": "Automated pipeline for matching and applying to listings via MCP"},
         ]
     }
 
@@ -516,5 +518,50 @@ async def run_job_match(
     return {
         "success": True,
         "report": final_state.get("final_report", {}),
+        "logs": final_state.get("logs", []),
+    }
+
+
+# ── Agent 8: Auto Apply Agent (Scrapes + Matches + Cover Letters) ──
+class AutoApplyRequest(BaseModel):
+    resume_text: str
+    target_role: str
+    location: str = "India"
+    min_match_score: int = 65
+    limit: int = 5
+
+
+@app.post("/auto-apply")
+async def run_auto_apply(
+    request: AutoApplyRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """
+    Automated job search, scoring, resume tailoring and cover letter pipeline.
+    """
+    verify_secret(x_agent_secret)
+
+    initial_state = {
+        "resume_text": request.resume_text,
+        "target_role": request.target_role,
+        "location": request.location,
+        "min_match_score": request.min_match_score,
+        "limit": request.limit,
+        "found_jobs": [],
+        "tailored_resumes": [],
+        "cover_letters": [],
+        "hr_email": None,
+        "email_sent": False,
+        "logged_to_sheets": False,
+        "logs": [],
+    }
+
+    final_state = await auto_apply_agent.ainvoke(initial_state)
+
+    return {
+        "success": True,
+        "found_jobs": final_state.get("found_jobs", []),
+        "tailored_resumes": final_state.get("tailored_resumes", []),
+        "cover_letters": final_state.get("cover_letters", []),
         "logs": final_state.get("logs", []),
     }
