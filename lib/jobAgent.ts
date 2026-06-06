@@ -10,6 +10,7 @@
 
 import { callGroq } from "@/lib/groq";
 import { safeJsonParse } from "@/lib/utils";
+import { scrapeUrlWithPlaywright } from "./playwrightScraper";
 import {
   JOB_AGENT_SYSTEM,
   gapAnalysisPrompt,
@@ -239,27 +240,34 @@ export async function tailorResume(
 
 // ── Step 6: JD URL Scraper ───────────────────────────────────────
 export async function extractJDFromUrl(url: string): Promise<JDExtractResult> {
-  // Fetch the page
   let pageText = "";
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-    const html = await res.text();
-    // Strip HTML tags to get plain text
-    pageText = html
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-  } catch (err) {
-    console.error("[JD_SCRAPE] Fetch failed:", err);
-    return { ...FALLBACK_JD, extractionSuccess: false };
+    console.log(`[JD_SCRAPE] Attempting to scrape dynamic page with Playwright: ${url}`);
+    pageText = await scrapeUrlWithPlaywright(url);
+    console.log(`[JD_SCRAPE] Playwright scrape succeeded. Length: ${pageText.length}`);
+  } catch (playwrightError) {
+    console.warn("[JD_SCRAPE] Playwright scraping failed. Falling back to HTTP fetch...", playwrightError);
+    // Fetch fallback for static/simple sites
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      const html = await res.text();
+      // Strip HTML tags to get plain text
+      pageText = html
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    } catch (fetchError) {
+      console.error("[JD_SCRAPE] Fetch fallback also failed:", fetchError);
+      return { ...FALLBACK_JD, extractionSuccess: false };
+    }
   }
 
   if (!pageText || pageText.length < 100) return { ...FALLBACK_JD, extractionSuccess: false };
