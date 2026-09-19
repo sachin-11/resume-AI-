@@ -19,6 +19,7 @@ interface Session {
   createdAt: string;
   feedbackReport: { overallScore: number } | null;
   _count: { questions: number };
+  aiCostUsd?: number;
 }
 
 export default function HistoryPage() {
@@ -170,6 +171,14 @@ export default function HistoryPage() {
                       <span className={`capitalize ${s.status === "completed" ? "text-green-500" : s.status === "active" ? "text-blue-400" : "text-yellow-500"}`}>
                         {s.status}
                       </span>
+                      {typeof s.aiCostUsd === "number" && (
+                        <>
+                          <span>·</span>
+                          <span className="text-emerald-500" title="AI token cost for this interview">
+                            ${s.aiCostUsd.toFixed(4)}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">

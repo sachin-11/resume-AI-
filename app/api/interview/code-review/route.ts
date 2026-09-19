@@ -99,7 +99,9 @@ export async function POST(req: NextRequest) {
     if (quick) {
       const raw = await callGroq(
         `Return only valid JSON. Be concise.`,
-        quickCodeCoachPrompt(question, code, language ?? "javascript")
+        quickCodeCoachPrompt(question, code, language ?? "javascript"),
+        undefined,
+        { userId: session.user.id, sessionId, feature: "code_review" }
       );
       const quickReview = safeJsonParse(raw, {
         progressScore: 50,
@@ -109,7 +111,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ quickReview });
     }
 
-    const raw = await callGroq(CODE_REVIEW_SYSTEM, codeReviewPrompt(question, code, language ?? "javascript"));
+    const raw = await callGroq(
+      CODE_REVIEW_SYSTEM,
+      codeReviewPrompt(question, code, language ?? "javascript"),
+      undefined,
+      { userId: session.user.id, sessionId, feature: "code_review" }
+    );
 
     const review = safeJsonParse(raw, {
       score: 50, verdict: "average",

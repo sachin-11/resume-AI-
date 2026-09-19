@@ -39,7 +39,17 @@ export async function GET(req: NextRequest) {
 
   const planCounts = Object.fromEntries(stats.map((s) => [s.plan, s._count.id]));
 
-  return NextResponse.json({ users, total, pages: Math.ceil(total / limit), planCounts });
+  const costs = users.length
+    ? await db.aiUsageLog.groupBy({
+        by: ["userId"],
+        where: { userId: { in: users.map((u) => u.id) } },
+        _sum: { costUsd: true },
+      })
+    : [];
+  const costMap = new Map(costs.map((c) => [c.userId, c._sum.costUsd ?? 0]));
+  const usersWithCost = users.map((u) => ({ ...u, aiCostUsd: costMap.get(u.id) ?? 0 }));
+
+  return NextResponse.json({ users: usersWithCost, total, pages: Math.ceil(total / limit), planCounts });
 }
 
 export async function PATCH(req: NextRequest) {

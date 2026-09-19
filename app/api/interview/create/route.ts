@@ -94,7 +94,9 @@ export async function POST(req: NextRequest) {
               pairProgramming,
               ragContext,
               personaPrompt: persona.systemPrompt,
-            })
+            }),
+            undefined,
+            { userId: session.user.id, feature: "interview_create" }
           );
           const parsed_q = safeJsonParse<GeneratedQuestion[]>(raw, []);
           const cycle: Array<"technical" | "hr" | "domain"> = ["technical", "hr", "domain"];
@@ -147,7 +149,9 @@ function solve(input) {
             personaPrompt: persona.systemPrompt,
             ragContext,
             pairProgramming: pairProgramming && roundType === "technical",
-          })
+          }),
+          undefined,
+          { userId: session.user.id, feature: "interview_create" }
         );
         const parsed_q = safeJsonParse<GeneratedQuestion[]>(raw, MOCK_QUESTIONS.technical);
         aiQuestions = parsed_q.slice(0, aiCount).map((q, i) => ({ ...q, orderIndex: i + 1 }));

@@ -10,8 +10,74 @@
 
 import Groq from "groq-sdk";
 import nodemailer from "nodemailer";
+import { db } from "@/lib/db";
+import { calcCostUsd } from "@/lib/pricing";
+import { logGeneration } from "@/lib/langfuse";
 
 const TIMEOUT_MS = 30_000;
+
+// ── Cost tracking context ─────────────────────────────────────────
+// Pass this from callers that want a cost attributed to a specific user/interview.
+// Calls made without it still get logged (feature defaults to "general") so the
+// platform-wide total stays accurate.
+export interface AiCallContext {
+  userId?: string;
+  sessionId?: string;
+  feature?: string;
+}
+
+interface Usage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+interface ProviderResult {
+  content: string;
+  provider: "groq" | "openai";
+  model: string;
+  usage: Usage;
+}
+
+async function logAiUsage(
+  result: ProviderResult,
+  userPrompt: string,
+  context?: AiCallContext
+) {
+  const feature = context?.feature ?? "general";
+
+  // In-app admin dashboard — our own approximate pricing table, always available.
+  try {
+    const costUsd = calcCostUsd(result.model, result.usage.promptTokens, result.usage.completionTokens);
+    await db.aiUsageLog.create({
+      data: {
+        userId: context?.userId,
+        sessionId: context?.sessionId,
+        feature,
+        provider: result.provider,
+        model: result.model,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        totalTokens: result.usage.totalTokens,
+        costUsd,
+      },
+    });
+  } catch (err) {
+    console.error("[AI_USAGE_LOG]", err);
+  }
+
+  // Langfuse — authoritative cost (their maintained pricing catalog) + full trace, opt-in via env.
+  void logGeneration({
+    name: feature,
+    model: result.model,
+    input: userPrompt,
+    output: result.content,
+    usage: result.usage,
+    userId: context?.userId,
+    sessionId: context?.sessionId,
+    metadata: { provider: result.provider },
+  });
+}
 
 // ── Provider state tracking ──────────────────────────────────────
 // Track which provider is currently active so we don't keep retrying failed one
@@ -110,7 +176,7 @@ async function callGroqDirect(
   systemPrompt: string,
   userPrompt: string,
   model = "llama-3.3-70b-versatile"
-): Promise<string> {
+): Promise<ProviderResult> {
   const completion = await getGroq().chat.completions.create(
     {
       model,
@@ -123,7 +189,16 @@ async function callGroqDirect(
     },
     { signal: AbortSignal.timeout(TIMEOUT_MS) }
   );
-  return completion.choices[0]?.message?.content ?? "";
+  return {
+    content: completion.choices[0]?.message?.content ?? "",
+    provider: "groq",
+    model,
+    usage: {
+      promptTokens: completion.usage?.prompt_tokens ?? 0,
+      completionTokens: completion.usage?.completion_tokens ?? 0,
+      totalTokens: completion.usage?.total_tokens ?? 0,
+    },
+  };
 }
 
 // ── OpenAI call ──────────────────────────────────────────────────
@@ -131,7 +206,7 @@ async function callOpenAI(
   systemPrompt: string,
   userPrompt: string,
   model = "gpt-4o-mini"
-): Promise<string> {
+): Promise<ProviderResult> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -160,14 +235,24 @@ async function callOpenAI(
   }
 
   const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? "";
+  return {
+    content: data.choices?.[0]?.message?.content ?? "",
+    provider: "openai",
+    model,
+    usage: {
+      promptTokens: data.usage?.prompt_tokens ?? 0,
+      completionTokens: data.usage?.completion_tokens ?? 0,
+      totalTokens: data.usage?.total_tokens ?? 0,
+    },
+  };
 }
 
 // ── Main export: Groq first, OpenAI fallback ─────────────────────
 export async function callGroq(
   systemPrompt: string,
   userPrompt: string,
-  _model = "llama-3.3-70b-versatile"
+  _model = "llama-3.3-70b-versatile",
+  context?: AiCallContext
 ): Promise<string> {
   const now = Date.now();
   const groqAvailable = process.env.GROQ_API_KEY && now > groqUnavailableUntil;
@@ -177,7 +262,8 @@ export async function callGroq(
   if (groqAvailable) {
     try {
       const result = await callGroqDirect(systemPrompt, userPrompt);
-      return result;
+      await logAiUsage(result, userPrompt, context);
+      return result.content;
     } catch (err) {
       const reason = (err as Error).message ?? "Unknown error";
 
@@ -201,13 +287,14 @@ export async function callGroq(
   if (openaiAvailable) {
     try {
       const result = await callOpenAI(systemPrompt, userPrompt);
+      await logAiUsage(result, userPrompt, context);
 
       // If we were using OpenAI as fallback, log it
       if (groqAvailable === false || now <= groqUnavailableUntil) {
         console.log("[AI] OpenAI fallback successful");
       }
 
-      return result;
+      return result.content;
     } catch (err) {
       const reason = (err as Error).message ?? "Unknown error";
       console.error("[AI] OpenAI also failed:", reason);
@@ -217,7 +304,9 @@ export async function callGroq(
         console.warn("[AI] Both failed — retrying Groq as last resort");
         groqUnavailableUntil = 0; // reset cooldown
         try {
-          return await callGroqDirect(systemPrompt, userPrompt);
+          const result = await callGroqDirect(systemPrompt, userPrompt);
+          await logAiUsage(result, userPrompt, context);
+          return result.content;
         } catch (groqErr) {
           console.error("[AI] Groq last resort also failed:", (groqErr as Error).message);
         }
@@ -236,7 +325,9 @@ export async function callGroq(
   if (process.env.GROQ_API_KEY && !openaiAvailable) {
     console.warn("[AI] Groq in cooldown, no OpenAI — retrying Groq");
     groqUnavailableUntil = 0;
-    return callGroqDirect(systemPrompt, userPrompt);
+    const result = await callGroqDirect(systemPrompt, userPrompt);
+    await logAiUsage(result, userPrompt, context);
+    return result.content;
   }
 
   throw new Error("AI provider unavailable. Please try again.");

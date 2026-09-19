@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   BarChart3, FileText, MessageSquare, TrendingUp,
   Upload, ArrowRight, Loader2, Trophy, Users, Zap, Crown, CalendarDays,
+  DollarSign,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -62,6 +63,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [billingStatus, setBillingStatus] = useState<{ plan: string; remaining: number | null; used: number } | null>(null);
+  const [aiCostUsd, setAiCostUsd] = useState<number | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -98,6 +100,15 @@ export default function DashboardPage() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (session?.user?.role === "admin") {
+      fetch("/api/admin/ai-cost")
+        .then((r) => r.json())
+        .then((d) => setAiCostUsd(typeof d.totalCostUsd === "number" ? d.totalCostUsd : 0))
+        .catch(() => {});
+    }
+  }, [session]);
+
+  useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
         setShowDatePicker(false);
@@ -112,6 +123,15 @@ export default function DashboardPage() {
     { title: "Avg Score", value: stats?.avgScore ? `${stats.avgScore}/100` : "N/A", icon: TrendingUp, color: getScoreColor(stats?.avgScore ?? 0), bg: "bg-green-500/10" },
     { title: "Resumes", value: stats?.totalResumes ?? 0, icon: FileText, color: "text-blue-500", bg: "bg-blue-500/10" },
     { title: "Last Activity", value: stats?.lastActivity ? formatRelativeTime(stats.lastActivity) : "Never", icon: BarChart3, color: "text-orange-500", bg: "bg-orange-500/10" },
+    ...(session?.user?.role === "admin"
+      ? [{
+          title: "AI Cost (platform)",
+          value: aiCostUsd !== null ? `$${aiCostUsd.toFixed(4)}` : "…",
+          icon: DollarSign,
+          color: "text-emerald-500",
+          bg: "bg-emerald-500/10",
+        }]
+      : []),
   ];
 
   if (loading) return (
@@ -228,22 +248,26 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stat Cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map(({ title, value, icon: Icon, color, bg }) => (
-          <Card key={title}>
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-muted-foreground">{title}</p>
-                  <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+      <div className={`grid grid-cols-2 gap-4 ${session?.user?.role === "admin" ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+        {statCards.map(({ title, value, icon: Icon, color, bg }) => {
+          const isCostCard = title === "AI Cost (platform)";
+          const card = (
+            <Card key={title} className={isCostCard ? "hover:border-emerald-500/30 transition-colors" : undefined}>
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">{title}</p>
+                    <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+                  </div>
+                  <div className={`rounded-lg p-2.5 ${bg}`}>
+                    <Icon className={`h-5 w-5 ${color}`} />
+                  </div>
                 </div>
-                <div className={`rounded-lg p-2.5 ${bg}`}>
-                  <Icon className={`h-5 w-5 ${color}`} />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+              </CardContent>
+            </Card>
+          );
+          return isCostCard ? <Link key={title} href="/admin">{card}</Link> : card;
+        })}
       </div>
 
       {/* ── Free Plan Usage Bar ── */}

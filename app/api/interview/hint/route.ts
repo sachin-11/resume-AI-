@@ -42,13 +42,18 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { questionText, hintLevel = 1 } = await req.json();
+  const { questionText, hintLevel = 1, sessionId } = await req.json();
   if (!questionText) return NextResponse.json({ error: "questionText required" }, { status: 400 });
 
   const level = Math.min(3, Math.max(1, Number(hintLevel)));
 
   try {
-    const raw = await callGroq(HINT_SYSTEM, hintPrompt(questionText, level));
+    const raw = await callGroq(
+      HINT_SYSTEM,
+      hintPrompt(questionText, level),
+      undefined,
+      { userId: session.user.id, sessionId, feature: "hint" }
+    );
     const result = safeJsonParse(raw, {
       hint: "Think about the core concept behind this question.",
       scorePenalty: level * 5,

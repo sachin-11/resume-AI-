@@ -90,7 +90,12 @@ export async function POST(req: NextRequest) {
         ? `\nNOTE: The candidate used hints during the interview. Apply a ${hintPenalty} point penalty to the overall score.\n`
         : "";
 
-      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(realAnswers, "en", ragContext + skippedNote + hintNote));
+      const raw = await callGroq(
+        FEEDBACK_SYSTEM,
+        feedbackPrompt(realAnswers, "en", ragContext + skippedNote + hintNote),
+        undefined,
+        { userId: session.user.id, sessionId, feature: "feedback" }
+      );
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 

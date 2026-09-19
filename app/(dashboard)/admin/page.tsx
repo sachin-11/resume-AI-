@@ -4,7 +4,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import {
   Users, Search, Loader2, Crown, Zap, Building2,
-  CheckCircle, Shield, ChevronLeft, ChevronRight,
+  CheckCircle, Shield, ChevronLeft, ChevronRight, DollarSign,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +22,18 @@ interface User {
   createdAt: string;
   interviewsThisMonth: number;
   phoneVerified: boolean;
+  aiCostUsd?: number;
   _count: { interviewSessions: number; resumes: number; campaigns: number };
+}
+
+interface AiCostByFeature { feature: string; costUsd: number; tokens: number; calls: number }
+interface AiCostTopInterview { sessionId: string | null; title: string; role: string; candidate: string; costUsd: number; tokens: number; calls: number }
+interface AiCostStats {
+  totalCostUsd: number;
+  totalTokens: number;
+  totalCalls: number;
+  byFeature: AiCostByFeature[];
+  topInterviews: AiCostTopInterview[];
 }
 
 const PLAN_META: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
@@ -40,6 +51,7 @@ export default function AdminPage() {
   const [pages, setPages] = useState(1);
   const [page, setPage] = useState(1);
   const [planCounts, setPlanCounts] = useState<Record<string, number>>({});
+  const [aiCost, setAiCost] = useState<AiCostStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -68,7 +80,12 @@ export default function AdminPage() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { if (status === "authenticated") loadUsers(); }, [status]);
+  useEffect(() => {
+    if (status === "authenticated") {
+      loadUsers();
+      fetch("/api/admin/ai-cost").then((r) => r.json()).then(setAiCost).catch(() => {});
+    }
+  }, [status]);
 
   function handleSearch() {
     setSearch(searchInput);
@@ -134,6 +151,67 @@ export default function AdminPage() {
         </CardContent></Card>
       </div>
 
+      {/* AI token cost */}
+      {aiCost && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-emerald-400" /> AI Token Cost
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-lg border border-border p-3 text-center">
+                <p className="text-xl font-black text-emerald-400">${aiCost.totalCostUsd.toFixed(4)}</p>
+                <p className="text-xs text-muted-foreground mt-1">Total Spend</p>
+              </div>
+              <div className="rounded-lg border border-border p-3 text-center">
+                <p className="text-xl font-black text-violet-400">{aiCost.totalTokens.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">Total Tokens</p>
+              </div>
+              <div className="rounded-lg border border-border p-3 text-center">
+                <p className="text-xl font-black text-blue-400">{aiCost.totalCalls.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">AI Calls</p>
+              </div>
+            </div>
+
+            {aiCost.byFeature.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">Cost by feature</p>
+                <div className="space-y-1.5">
+                  {aiCost.byFeature.map((f) => (
+                    <div key={f.feature} className="flex items-center justify-between text-sm rounded-md bg-secondary/50 px-3 py-1.5">
+                      <span className="capitalize text-muted-foreground">{f.feature.replace(/_/g, " ")}</span>
+                      <span className="flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground">{f.calls} calls</span>
+                        <span className="font-semibold text-emerald-400">${f.costUsd.toFixed(4)}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {aiCost.topInterviews.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">Most expensive interviews</p>
+                <div className="space-y-1.5">
+                  {aiCost.topInterviews.map((t) => (
+                    <div key={t.sessionId} className="flex items-center justify-between text-sm rounded-md border border-border px-3 py-1.5">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{t.title}</p>
+                        <p className="text-xs text-muted-foreground truncate">{t.candidate}</p>
+                      </div>
+                      <span className="font-semibold text-emerald-400 shrink-0 ml-3">${t.costUsd.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Search */}
       <div className="flex gap-2">
         <div className="relative flex-1">
@@ -183,6 +261,9 @@ export default function AdminPage() {
                         <span>{u._count.interviewSessions} interviews</span>
                         <span>{u._count.resumes} resumes</span>
                         <span>{u._count.campaigns} campaigns</span>
+                        {typeof u.aiCostUsd === "number" && u.aiCostUsd > 0 && (
+                          <span className="text-emerald-500">${u.aiCostUsd.toFixed(4)} AI cost</span>
+                        )}
                         <span>Joined {formatDate(u.createdAt)}</span>
                       </div>
                     </div>

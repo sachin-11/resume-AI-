@@ -226,6 +226,25 @@ model FeedbackReport {
   @@index([sessionId])
 }
 
+// ── AI usage & cost tracking (per interview + platform-wide) ─────
+model AiUsageLog {
+  id                String   @id @default(cuid())
+  userId            String?
+  sessionId         String?  // InterviewSession id, when the call is tied to one
+  feature           String   @default("general") // interview_create | feedback | hint | code_review | general | ...
+  provider          String   // groq | openai
+  model             String
+  promptTokens      Int      @default(0)
+  completionTokens  Int      @default(0)
+  totalTokens       Int      @default(0)
+  costUsd           Float    @default(0)
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
 // ── Bulk Interview Campaign ──────────────────────────────────────
 
 model InterviewCampaign {

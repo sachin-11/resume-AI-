@@ -82,7 +82,12 @@ export async function POST(req: NextRequest) {
     let feedback: FeedbackReport = MOCK_FEEDBACK;
 
     if (process.env.GROQ_API_KEY && qa.length > 0) {
-      const raw = await callGroq(FEEDBACK_SYSTEM, feedbackPrompt(qa, interviewSession.language ?? "en"));
+      const raw = await callGroq(
+        FEEDBACK_SYSTEM,
+        feedbackPrompt(qa, interviewSession.language ?? "en"),
+        undefined,
+        { userId: interviewSession.userId, sessionId, feature: "feedback" }
+      );
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 
