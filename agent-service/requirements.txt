@@ -7,3 +7,5 @@ langchain-core==0.2.43
 langchain-groq==0.1.10
 langchain-openai==0.1.25
 langgraph==0.2.28
+pinecone==9.1.0
+langfuse==4.14.0

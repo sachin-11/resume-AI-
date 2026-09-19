@@ -147,6 +147,40 @@ export async function indexResume(resumeId: string, userId: string, resumeText: 
   }
 }
 
+// ── RERANK: blend vector similarity with lexical overlap ────────
+// Vector search alone can rank a chunk high on general semantic closeness
+// while missing the query's specific keywords (role/skill names, tool names).
+// This reranks the over-fetched candidate pool by blending Pinecone's
+// similarity score with a lexical overlap score — cheap, deterministic,
+// no extra embedding/LLM call.
+function tokenize(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/\W+/).filter(Boolean));
+}
+
+function lexicalOverlapScore(query: string, chunk: string): number {
+  const queryTokens = tokenize(query);
+  const chunkTokens = tokenize(chunk);
+  if (queryTokens.size === 0 || chunkTokens.size === 0) return 0;
+  let overlap = 0;
+  for (const t of queryTokens) if (chunkTokens.has(t)) overlap++;
+  return overlap / queryTokens.size; // fraction of query terms present in the chunk
+}
+
+function rerankChunks(
+  query: string,
+  candidates: Array<{ text: string; vectorScore: number }>,
+  topK: number
+): string[] {
+  return candidates
+    .map((c) => ({
+      text: c.text,
+      score: c.vectorScore * 0.7 + lexicalOverlapScore(query, c.text) * 0.3,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .map((c) => c.text);
+}
+
 // ── RETRIEVE: Get relevant chunks for a query ───────────────────
 export async function retrieveRelevantChunks(
   query: string,
@@ -159,19 +193,23 @@ export async function retrieveRelevantChunks(
   try {
     const index = getIndex();
     const queryEmbedding = await getEmbedding(query);
+    // Over-fetch so the reranker has a real candidate pool to work with.
+    const fetchK = Math.min(topK * 3, 15);
 
     const results = await index.query({
       vector: queryEmbedding,
-      topK,
+      topK: fetchK,
       // Serverless + newer APIs: explicit $eq (plain { userId } can fail in some projects)
       filter: { userId: { $eq: userId } },
       includeMetadata: true,
     });
 
-    return results.matches
-      ?.filter((m) => (m.score ?? 0) > 0.3)
-      .map((m) => (m.metadata?.text as string) ?? "")
-      .filter(Boolean) ?? [];
+    const candidates = (results.matches ?? [])
+      .filter((m) => (m.score ?? 0) > 0.3)
+      .map((m) => ({ text: (m.metadata?.text as string) ?? "", vectorScore: m.score ?? 0 }))
+      .filter((c) => c.text);
+
+    return rerankChunks(query, candidates, topK);
   } catch (err) {
     if (isPineconeIndexMissingError(err)) {
       pineconeIndexUnavailable = true;

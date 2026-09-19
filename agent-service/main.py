@@ -176,6 +176,10 @@ from agents.market_intelligence.graph import market_intelligence_agent
 from agents.daily_ops.graph import daily_ops_agent
 from agents.job_match.graph import job_match_agent
 from agents.auto_apply.graph import auto_apply_agent
+from agents.orchestrator.graph import orchestrator_agent
+from agents.scheduler.graph import scheduler_agent
+from agents.faq.graph import faq_agent
+from agents.faq.store import ingest_policy_doc
 
 
 # ── Agent 1: Interview Evaluator ─────────────────────────────────
@@ -455,6 +459,9 @@ def list_agents():
             {"name": "daily-ops",            "endpoint": "/daily-ops",             "description": "Morning brief, standup, Gmail/Slack-style digests from pasted context"},
             {"name": "job-match",            "endpoint": "/job-match-agent",       "description": "Deep JD fit analysis, mock interview, salary intel, application strategy"},
             {"name": "auto-apply",           "endpoint": "/auto-apply",             "description": "Automated pipeline for matching and applying to listings via MCP"},
+            {"name": "orchestrator",         "endpoint": "/orchestrate",            "description": "Routes a free-text message to the right sub-agent: resume screening, scheduling, or FAQ"},
+            {"name": "scheduler",            "endpoint": "/schedule-interview",     "description": "Proposes interview slots (Calendar MCP → InterviewSlot rows → generated) and drafts a confirmation message"},
+            {"name": "faq-answerer",         "endpoint": "/faq/ask",                "description": "Answers questions from indexed company policy docs via Pinecone RAG (POST /faq/ingest to index a doc)"},
         ]
     }
 
@@ -563,5 +570,174 @@ async def run_auto_apply(
         "found_jobs": final_state.get("found_jobs", []),
         "tailored_resumes": final_state.get("tailored_resumes", []),
         "cover_letters": final_state.get("cover_letters", []),
+        "logs": final_state.get("logs", []),
+    }
+
+
+# ── Orchestrator: Recruitment Copilot Router ──────────────────────
+class OrchestrateRequest(BaseModel):
+    user_message: str
+    resume_text: Optional[str] = None
+    job_description: Optional[str] = None
+    candidate_name: Optional[str] = None
+    candidate_email: Optional[str] = None
+    github_username: Optional[str] = None
+    existing_slots: list = []   # InterviewSlot rows {id, startsAt, durationMin, isBooked}, for scheduling intent
+
+
+@app.post("/orchestrate")
+async def orchestrate(
+    request: OrchestrateRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """
+    Central LangGraph router — classifies a free-text message and dispatches
+    it to the right sub-agent (resume screener, scheduler, or FAQ answerer).
+
+    Nodes: classify_intent →(route)→ resume_screening | scheduling | faq | other → finalize
+    """
+    verify_secret(x_agent_secret)
+
+    if not request.user_message or len(request.user_message.strip()) < 3:
+        raise HTTPException(status_code=400, detail="user_message required")
+
+    initial_state = {
+        "user_message": request.user_message,
+        "resume_text": request.resume_text,
+        "job_description": request.job_description,
+        "candidate_name": request.candidate_name,
+        "candidate_email": request.candidate_email,
+        "github_username": request.github_username,
+        "existing_slots": request.existing_slots,
+        "intent": "",
+        "intent_reasoning": "",
+        "resume_screener_result": {},
+        "scheduler_result": {},
+        "faq_result": {},
+        "other_result": {},
+        "needs_human_review": False,
+        "review_reasons": [],
+        "final_response": {},
+        "logs": [],
+    }
+
+    final_state = await orchestrator_agent.ainvoke(initial_state)
+
+    return {
+        "success": True,
+        **final_state.get("final_response", {}),
+        "logs": final_state.get("logs", []),
+    }
+
+
+# ── Scheduler: Interview slot proposal ─────────────────────────────
+class ScheduleInterviewRequest(BaseModel):
+    candidate_name: str
+    candidate_email: str
+    role: str
+    requested_timeframe: str = ""
+    timezone: str = "Asia/Kolkata"
+    existing_slots: list = []   # InterviewSlot rows {id, startsAt, durationMin, isBooked}
+
+
+@app.post("/schedule-interview")
+async def schedule_interview(
+    request: ScheduleInterviewRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """
+    Proposes interview slots and drafts a confirmation message.
+
+    Nodes: propose_slots → draft_confirmation
+    Fallback chain: Calendar MCP (opt-in) → app's InterviewSlot rows → generated business-hours slots.
+    """
+    verify_secret(x_agent_secret)
+
+    initial_state = {
+        "candidate_name": request.candidate_name,
+        "candidate_email": request.candidate_email,
+        "role": request.role,
+        "requested_timeframe": request.requested_timeframe,
+        "timezone": request.timezone,
+        "existing_slots": request.existing_slots,
+        "calendar_source": "",
+        "proposed_slots": [],
+        "confirmation_message": "",
+        "logs": [],
+    }
+
+    final_state = await scheduler_agent.ainvoke(initial_state)
+
+    return {
+        "success": True,
+        "calendarSource": final_state.get("calendar_source"),
+        "proposedSlots": final_state.get("proposed_slots", []),
+        "confirmationMessage": final_state.get("confirmation_message", ""),
+        "logs": final_state.get("logs", []),
+    }
+
+
+# ── FAQ Answerer: company-docs RAG ─────────────────────────────────
+class FAQIngestRequest(BaseModel):
+    doc_id: str
+    title: str
+    text: str
+
+
+@app.post("/faq/ingest")
+async def faq_ingest(
+    request: FAQIngestRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """Chunk + embed + upsert a company policy/FAQ doc into Pinecone (namespaced via metadata type=policy_doc)."""
+    verify_secret(x_agent_secret)
+
+    if len(request.text.strip()) < 20:
+        raise HTTPException(status_code=400, detail="text too short")
+
+    result = await ingest_policy_doc(request.doc_id, request.title, request.text)
+    if not result.get("success"):
+        raise HTTPException(status_code=503, detail=result.get("message", "Ingestion failed"))
+    return result
+
+
+class FAQAskRequest(BaseModel):
+    question: str
+
+
+@app.post("/faq/ask")
+async def faq_ask(
+    request: FAQAskRequest,
+    x_agent_secret: Optional[str] = Header(None)
+):
+    """
+    Answers a question strictly from indexed company docs (RAG over Pinecone).
+
+    Nodes: retrieve_docs → answer_question
+    """
+    verify_secret(x_agent_secret)
+
+    if not request.question or len(request.question.strip()) < 3:
+        raise HTTPException(status_code=400, detail="question required")
+
+    initial_state = {
+        "question": request.question,
+        "retrieved_chunks": [],
+        "answer": "",
+        "sources": [],
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "eval_reasoning": "",
+        "logs": [],
+    }
+
+    final_state = await faq_agent.ainvoke(initial_state)
+
+    return {
+        "success": True,
+        "answer": final_state.get("answer", ""),
+        "sources": final_state.get("sources", []),
+        "faithfulness": final_state.get("faithfulness", 0.0),
+        "answerRelevancy": final_state.get("answer_relevancy", 0.0),
         "logs": final_state.get("logs", []),
     }
