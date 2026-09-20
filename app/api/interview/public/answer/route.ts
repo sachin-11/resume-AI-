@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { analyzeAnswerAndMaybeFollowup } from "@/lib/interview-answer-analysis";
 import { runAdaptiveCheckpoint } from "@/lib/interview-adaptive-checkpoint";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
+import { verifyInviteToken } from "@/lib/candidateInvite";
 
 // Public endpoint — no auth required (for candidate invite sessions)
 export async function POST(req: NextRequest) {
@@ -10,10 +11,14 @@ export async function POST(req: NextRequest) {
   const rl = rateLimit(getIP(req), RATE_LIMITS.publicAnswer);
   if (!rl.success) return rateLimitResponse(rl);
   try {
-    const { questionId, answerText, sessionId } = await req.json();
+    const { questionId, answerText, sessionId, token } = await req.json();
 
     if (!questionId || !answerText || !sessionId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    if (!(await verifyInviteToken(sessionId, token))) {
+      return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
     }
 
     const session = await db.interviewSession.findUnique({

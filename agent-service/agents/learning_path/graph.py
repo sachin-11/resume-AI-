@@ -30,7 +30,7 @@ class LearningPathState(TypedDict):
     logs: Annotated[List[str], operator.add]
 
 
-def analyze_gaps(state: LearningPathState) -> dict:
+async def analyze_gaps(state: LearningPathState) -> dict:
     llm = get_llm()
     prompt = f"""Analyze skill gaps for a {state.get('experience_level', 'mid')} {state.get('target_role', 'Developer')}.
 Return ONLY valid JSON:
@@ -50,7 +50,7 @@ Weak areas: {state.get('weak_areas', [])}
 Current skills: {state.get('current_skills', [])}
 Available hours/week: {state.get('available_hours_per_week', 10)}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"prioritized_topics": []}
@@ -63,7 +63,7 @@ Available hours/week: {state.get('available_hours_per_week', 10)}"""
     }
 
 
-def generate_resources(state: LearningPathState) -> dict:
+async def generate_resources(state: LearningPathState) -> dict:
     llm = get_llm()
     topics = state.get("prioritized_topics", [])
     level = state.get("experience_level", "mid")
@@ -88,7 +88,7 @@ Return ONLY valid JSON:
   "milestone": "Can containerize any application independently"
 }}"""
 
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         result = safe_json_parse(
             response.content if hasattr(response, 'content') else str(response),
             {"topic": topic.get("topic", ""), "resources": [], "practice_project": "", "milestone": ""}

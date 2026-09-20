@@ -10,7 +10,7 @@ from agents.faq.graph import faq_agent
 VALID_INTENTS = {"resume_screening", "scheduling", "faq", "other"}
 
 
-def classify_intent(state: dict) -> dict:
+async def classify_intent(state: dict) -> dict:
     """Node 1: Classify the user's message into a routable intent."""
     llm = get_llm(temperature=0)
     message = state.get("user_message", "")
@@ -30,7 +30,7 @@ intent must be one of:
 Message:
 {message[:1500]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, "content") else str(response),
         {"intent": "other", "reasoning": "Could not classify — defaulting to general handler"},
@@ -146,12 +146,12 @@ async def run_faq_answerer(state: dict) -> dict:
     }
 
 
-def run_other(state: dict) -> dict:
+async def run_other(state: dict) -> dict:
     """Branch: general fallback — plain LLM response, no tool/agent dispatch."""
     llm = get_llm()
     message = state.get("user_message", "")
 
-    response = llm.invoke(
+    response = await llm.ainvoke(
         f"You are a recruitment copilot assistant. Reply briefly and helpfully to this message:\n{message[:1000]}"
     )
     text = response.content if hasattr(response, "content") else str(response)

@@ -6,7 +6,7 @@ import httpx
 from agents.shared.llm import get_llm, safe_json_parse
 
 
-def extract_candidate_info(state: dict) -> dict:
+async def extract_candidate_info(state: dict) -> dict:
     """Node 1: Extract skills and GitHub username from resume."""
     llm = get_llm()
 
@@ -24,7 +24,7 @@ github_username: extract from GitHub URL if present, else null
 Resume:
 {state.get('resume_text', '')[:2500]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"skills": [], "github_username": None, "years_experience": 0}
@@ -157,7 +157,7 @@ async def fetch_github_data(state: dict) -> dict:
         }
 
 
-def match_against_jd(state: dict) -> dict:
+async def match_against_jd(state: dict) -> dict:
     """Node 3: Match candidate profile against JD."""
     llm = get_llm()
 
@@ -189,7 +189,7 @@ Job Description:
 Resume:
 {state.get('resume_text', '')[:1500]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {

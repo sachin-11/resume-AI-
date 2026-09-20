@@ -77,7 +77,7 @@ async def search_jobs_node(state: dict) -> dict:
 ]
 Search Results:
 {text_content[:3000]}"""
-                response = llm.invoke(parse_prompt)
+                response = await llm.ainvoke(parse_prompt)
                 parsed = safe_json_parse(response.content if hasattr(response, 'content') else str(response), [])
                 if isinstance(parsed, list):
                     found_jobs = parsed[:limit]
@@ -142,7 +142,7 @@ Resume Sample:
 {resume[:1500]}"""
 
         try:
-            response = llm.invoke(prompt)
+            response = await llm.ainvoke(prompt)
             res = safe_json_parse(response.content if hasattr(response, 'content') else str(response), {})
             
             score = int(res.get("matchScore", 50))
@@ -192,7 +192,7 @@ Job Description:
 {target_job.get('description', '')[:1000]}"""
 
     try:
-        res = llm.invoke(prompt)
+        res = await llm.ainvoke(prompt)
         tailored_text = res.content if hasattr(res, 'content') else str(res)
         logs.append("✅ Resume tailored successfully.")
         return {
@@ -229,7 +229,7 @@ Candidate Background:
 {resume[:1500]}"""
 
     try:
-        res = llm.invoke(prompt)
+        res = await llm.ainvoke(prompt)
         letter = res.content if hasattr(res, 'content') else str(res)
         logs.append("✅ Cover letter compiled successfully.")
         return {

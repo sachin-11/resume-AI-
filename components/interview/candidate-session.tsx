@@ -77,7 +77,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
         setShowTabWarning(true);
         navigator.sendBeacon(
           "/api/interview/public/tab-switch",
-          JSON.stringify({ sessionId })
+          JSON.stringify({ sessionId, token })
         );
       }
     }
@@ -90,7 +90,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
         fetch("/api/interview/public/tab-switch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify({ sessionId, token }),
         }).catch(() => {});
       }
     }
@@ -101,7 +101,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [sessionId]);
+  }, [sessionId, token]);
 
   // Auto-hide warning after 4 seconds
   useEffect(() => {
@@ -203,7 +203,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
 
   // Load session using PUBLIC endpoint (no auth needed)
   useEffect(() => {
-    fetch(`/api/interview/public/${sessionId}`)
+    fetch(`/api/interview/public/${sessionId}?token=${encodeURIComponent(token)}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -222,7 +222,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
       })
       .catch((err) => console.error("Failed to load session:", err))
       .finally(() => setLoading(false));
-  }, [sessionId, candidateName]);
+  }, [sessionId, token, candidateName]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, submitting]);
 
@@ -248,7 +248,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
     await fetch("/api/interview/public/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ questionId: currentQ.id, answerText: text.trim(), sessionId }),
+      body: JSON.stringify({ questionId: currentQ.id, answerText: text.trim(), sessionId, token }),
     });
 
     const next = currentIndex + 1;
@@ -265,7 +265,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
     }
     setSubmitting(false);
     if (!ttsEnabled && micSupported && next < questions.length) setTimeout(() => startMic(), 400);
-  }, [submitting, questions, currentIndex, sessionId, stopMic, stopSpeaking, ttsEnabled, micSupported, startMic, candidateName]);
+  }, [submitting, questions, currentIndex, sessionId, token, stopMic, stopSpeaking, ttsEnabled, micSupported, startMic, candidateName]);
 
   useEffect(() => { submitRef.current = doSubmit; }, [doSubmit]);
 
@@ -283,7 +283,7 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, token, action: "complete" }),
       }),
-      stopAndUpload(sessionId).catch(() => {}),
+      stopAndUpload(sessionId, token).catch(() => {}),
     ]);
 
     // Save photo if captured (non-blocking)

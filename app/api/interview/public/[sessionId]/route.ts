@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { verifyInviteToken } from "@/lib/candidateInvite";
 
 // Public endpoint — no auth required (for candidate invite sessions)
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
     const { sessionId } = await params;
+    const token = req.nextUrl.searchParams.get("token");
+
+    if (!(await verifyInviteToken(sessionId, token))) {
+      return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
+    }
 
     const session = await db.interviewSession.findUnique({
       where: { id: sessionId },

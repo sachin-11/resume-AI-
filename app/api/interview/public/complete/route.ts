@@ -9,6 +9,7 @@ import { sendRecruiterAlert, sendScoreReport } from "@/lib/mailer";
 import { dispatchWebhooks, dispatchScoreThresholdWebhooks } from "@/lib/webhooks";
 import type { WebhookPayload } from "@/lib/webhooks";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
+import { verifyInviteToken } from "@/lib/candidateInvite";
 
 // Public endpoint — no auth required (for candidate invite sessions)
 export async function POST(req: NextRequest) {
@@ -31,18 +32,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "sessionId required" }, { status: 400 });
     }
 
+    if (!(await verifyInviteToken(sessionId, token))) {
+      return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
+    }
+
     // ── Abandoned (tab closed mid-interview) ──────────────────
     if (action === "abandon") {
       await db.interviewSession.updateMany({
         where: { id: sessionId, status: "active" },
         data: { status: "abandoned" },
       });
-      if (token) {
-        await db.candidateInvite.updateMany({
-          where: { token, sessionId },
-          data: { status: "abandoned" },
-        });
-      }
+      await db.candidateInvite.updateMany({
+        where: { token, sessionId },
+        data: { status: "abandoned" },
+      });
       return NextResponse.json({ success: true });
     }
 
@@ -52,12 +55,10 @@ export async function POST(req: NextRequest) {
       data: { status: "completed" },
     });
 
-    if (token) {
-      await db.candidateInvite.updateMany({
-        where: { token, sessionId },
-        data: { status: "completed" },
-      });
-    }
+    await db.candidateInvite.updateMany({
+      where: { token, sessionId },
+      data: { status: "completed" },
+    });
 
     // Generate feedback
     const existing = await db.feedbackReport.findUnique({ where: { sessionId } });

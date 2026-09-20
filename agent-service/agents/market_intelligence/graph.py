@@ -30,7 +30,7 @@ class MarketIntelligenceState(TypedDict):
     logs: Annotated[List[str], operator.add]
 
 
-def analyze_market_demand(state: MarketIntelligenceState) -> dict:
+async def analyze_market_demand(state: MarketIntelligenceState) -> dict:
     """Node 1: Analyze current market demand for candidate's skills."""
     llm = get_llm()
 
@@ -56,7 +56,7 @@ Location: {state.get('location', 'India')}
 Resume:
 {state.get('resume_text', '')[:2000]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"current_skills": [], "market_demand_skills": [], "skill_gaps": [], "demand_score": 60}
@@ -71,7 +71,7 @@ Resume:
     }
 
 
-def estimate_salary(state: MarketIntelligenceState) -> dict:
+async def estimate_salary(state: MarketIntelligenceState) -> dict:
     """Node 2: Estimate salary range based on skills and market."""
     llm = get_llm()
 
@@ -102,7 +102,7 @@ Experience: {state.get('experience_years', 3)} years
 Skills: {state.get('current_skills', [])}
 Location: {state.get('location', 'India')}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"salary_range": {"min": 800000, "max": 1500000, "currency": "INR", "period": "annual"}}
@@ -114,7 +114,7 @@ Location: {state.get('location', 'India')}"""
     }
 
 
-def build_action_plan(state: MarketIntelligenceState) -> dict:
+async def build_action_plan(state: MarketIntelligenceState) -> dict:
     """Node 3: Build actionable market improvement plan."""
     llm = get_llm()
 
@@ -141,7 +141,7 @@ Current demand score: {state.get('demand_score', 60)}/100
 Role: {state.get('target_role', 'Developer')}
 Location: {state.get('location', 'India')}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"action_plan": [], "positioning_statement": "", "top_companies_hiring": [], "interview_tips": []}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
+import { verifyInviteToken } from "@/lib/candidateInvite";
 
 type ViolationType = "tab_switch" | "multiple_faces" | "no_face" | "looking_away" | "noise_detected" | "copy_paste";
 
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
   if (!rl.success) return rateLimitResponse(rl);
 
   try {
-    let body: { sessionId?: string; violationType?: string };
+    let body: { sessionId?: string; token?: string; violationType?: string };
     const contentType = req.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       body = await req.json();
@@ -48,8 +49,12 @@ export async function POST(req: NextRequest) {
       body = JSON.parse(text);
     }
 
-    const { sessionId, violationType = "tab_switch" } = body;
+    const { sessionId, token, violationType = "tab_switch" } = body;
     if (!sessionId) return NextResponse.json({ error: "sessionId required" }, { status: 400 });
+
+    if (!(await verifyInviteToken(sessionId, token))) {
+      return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
+    }
 
     const field = FIELD_MAP[violationType as ViolationType] ?? "tabSwitchCount";
 

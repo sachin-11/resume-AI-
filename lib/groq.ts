@@ -46,28 +46,29 @@ async function logAiUsage(
 ) {
   const feature = context?.feature ?? "general";
 
-  // In-app admin dashboard — our own approximate pricing table, always available.
-  try {
-    const costUsd = calcCostUsd(result.model, result.usage.promptTokens, result.usage.completionTokens);
-    await db.aiUsageLog.create({
-      data: {
-        userId: context?.userId,
-        sessionId: context?.sessionId,
-        feature,
-        provider: result.provider,
-        model: result.model,
-        promptTokens: result.usage.promptTokens,
-        completionTokens: result.usage.completionTokens,
-        totalTokens: result.usage.totalTokens,
-        costUsd,
-      },
-    });
-  } catch (err) {
-    console.error("[AI_USAGE_LOG]", err);
-  }
+  // In-app admin dashboard — our own approximate pricing table. Fire-and-forget:
+  // it's a redundant local mirror of what Langfuse tracks authoritatively below,
+  // so it shouldn't add a DB round-trip to every AI response in the hot path
+  // (question gen, hints, live-interview answers).
+  const costUsd = calcCostUsd(result.model, result.usage.promptTokens, result.usage.completionTokens);
+  void db.aiUsageLog.create({
+    data: {
+      userId: context?.userId,
+      sessionId: context?.sessionId,
+      feature,
+      provider: result.provider,
+      model: result.model,
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      costUsd,
+    },
+  }).catch((err) => console.error("[AI_USAGE_LOG]", err));
 
-  // Langfuse — authoritative cost (their maintained pricing catalog) + full trace, opt-in via env.
-  void logGeneration({
+  // Langfuse — authoritative cost (their maintained pricing catalog) + full trace.
+  // Actually awaited (unlike before) so the trace is flushed before this function
+  // returns, per logGeneration's own documented serverless-safety contract.
+  await logGeneration({
     name: feature,
     model: result.model,
     input: userPrompt,

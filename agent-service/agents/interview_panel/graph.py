@@ -38,7 +38,7 @@ class PanelState(TypedDict):
     logs: Annotated[List[str], operator.add]
 
 
-def technical_agent_eval(state: PanelState) -> dict:
+async def technical_agent_eval(state: PanelState) -> dict:
     """Technical Agent: Evaluates coding, system design, technical depth."""
     llm = get_llm()
     qa_text = "\n".join([
@@ -67,7 +67,7 @@ Q&A:
 Resume:
 {state.get('resume_text', '')[:1000]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"technical_score": 60, "verdict": "borderline", "strengths": [], "concerns": [], "notes": ""}
@@ -79,7 +79,7 @@ Resume:
     }
 
 
-def hr_agent_eval(state: PanelState) -> dict:
+async def hr_agent_eval(state: PanelState) -> dict:
     """HR Agent: Evaluates communication, culture fit, behavioral."""
     llm = get_llm()
     qa_text = "\n".join([
@@ -105,7 +105,7 @@ verdict must be: "strong_pass" | "pass" | "borderline" | "fail"
 Q&A:
 {qa_text[:2000]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"communication_score": 65, "verdict": "borderline", "strengths": [], "concerns": [], "notes": ""}
@@ -117,7 +117,7 @@ Q&A:
     }
 
 
-def domain_expert_eval(state: PanelState) -> dict:
+async def domain_expert_eval(state: PanelState) -> dict:
     """Domain Expert: Evaluates role-specific knowledge."""
     llm = get_llm()
     qa_text = "\n".join([
@@ -144,7 +144,7 @@ Role: {state.get('role', 'Developer')}
 Q&A:
 {qa_text[:2000]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"domain_score": 65, "verdict": "borderline", "strengths": [], "concerns": [], "notes": ""}

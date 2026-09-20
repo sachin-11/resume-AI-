@@ -78,7 +78,7 @@ def prepare(state: DailyOpsState) -> dict:
     }
 
 
-def synthesize(state: DailyOpsState) -> dict:
+async def synthesize(state: DailyOpsState) -> dict:
     if state.get("report", {}).get("error"):
         return {}
 
@@ -114,7 +114,7 @@ Return ONLY valid JSON with this shape (fill arrays even if short, use [] if not
   "risksOrBlockers": ["optional strings"]
 }}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     text = response.content if hasattr(response, "content") else str(response)
     parsed = safe_json_parse(
         text,

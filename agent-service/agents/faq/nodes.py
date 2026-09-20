@@ -20,7 +20,7 @@ async def retrieve_docs(state: dict) -> dict:
     }
 
 
-def answer_question(state: dict) -> dict:
+async def answer_question(state: dict) -> dict:
     """Node 2: Answer strictly from retrieved context, citing sources."""
     chunks = state.get("retrieved_chunks", [])
     question = state.get("question", "")
@@ -43,7 +43,7 @@ Context:
 
 Question: {question}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     text = response.content if hasattr(response, "content") else str(response)
     sources = sorted({c["title"] for c in chunks if c.get("title")})
 
@@ -54,13 +54,13 @@ Question: {question}"""
     }
 
 
-def eval_answer(state: dict) -> dict:
+async def eval_answer(state: dict) -> dict:
     """Node 3: RAGAS-style faithfulness/relevancy scoring + Langfuse guardrail trace."""
     question = state.get("question", "")
     chunks = state.get("retrieved_chunks", [])
     answer = state.get("answer", "")
 
-    scores = evaluate_rag_answer(question, chunks, answer)
+    scores = await evaluate_rag_answer(question, chunks, answer)
 
     trace_guardrail(
         name="faq-answerer",

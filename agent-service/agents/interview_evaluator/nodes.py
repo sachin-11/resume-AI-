@@ -8,7 +8,7 @@ from typing import Any
 from agents.shared.llm import get_llm, safe_json_parse
 
 
-def evaluate_answers(state: dict) -> dict:
+async def evaluate_answers(state: dict) -> dict:
     """Node 1: Evaluate each Q&A pair, detect if follow-up was needed."""
     llm = get_llm()
     qa_pairs = state.get("qa_pairs", [])
@@ -30,7 +30,7 @@ Return ONLY valid JSON:
 Question: {qa.get('question', '')}
 Answer: {qa.get('answer', '')}"""
 
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         result = safe_json_parse(response.content if hasattr(response, 'content') else str(response), {
             "score": 50, "feedback": "Could not evaluate", "needs_followup": False,
             "followup_question": None, "answer_quality": "average"
@@ -53,7 +53,7 @@ Answer: {qa.get('answer', '')}"""
     }
 
 
-def detect_contradictions(state: dict) -> dict:
+async def detect_contradictions(state: dict) -> dict:
     """Node 2: Check for contradictions across all answers."""
     llm = get_llm()
     evaluated = state.get("evaluated_qa", [])
@@ -80,7 +80,7 @@ If no contradictions found, return empty array.
 Answers:
 {qa_text[:3000]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"contradictions": [], "consistency_score": 80}
@@ -93,7 +93,7 @@ Answers:
     }
 
 
-def generate_holistic_score(state: dict) -> dict:
+async def generate_holistic_score(state: dict) -> dict:
     """Node 3: Generate final holistic evaluation."""
     llm = get_llm()
     evaluated = state.get("evaluated_qa", [])
@@ -136,7 +136,7 @@ Q&A Summary:
 {f'Contradictions: {chr(10).join(contradictions)}' if contradictions else ''}
 {f'Resume context: {resume_text[:500]}' if resume_text else ''}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {

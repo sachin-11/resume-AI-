@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
+import { verifyInviteToken } from "@/lib/candidateInvite";
 
 // Public endpoint — saves candidate photo snapshot (base64) against their invite token
 export async function POST(req: NextRequest) {
@@ -18,13 +19,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid photo" }, { status: 400 });
     }
 
-    // Find invite by token or sessionId
-    const where = token
-      ? { token: token as string }
-      : { sessionId };
+    if (!(await verifyInviteToken(sessionId, token))) {
+      return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
+    }
 
     await db.candidateInvite.updateMany({
-      where,
+      where: { token, sessionId },
       data: { photoUrl: photoDataUrl },
     });
 

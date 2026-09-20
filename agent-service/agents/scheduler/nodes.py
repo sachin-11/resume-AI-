@@ -89,7 +89,7 @@ async def propose_slots(state: dict) -> dict:
     }
 
 
-def draft_confirmation(state: dict) -> dict:
+async def draft_confirmation(state: dict) -> dict:
     """Node 2: Draft a short interview-scheduling message with the proposed slots."""
     llm = get_llm()
     slots = state.get("proposed_slots", [])
@@ -106,7 +106,7 @@ Offer these time slots and ask them to pick one (or suggest an alternative):
 
 Keep it under 100 words, professional and warm. No subject line, just the message body."""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     text = response.content if hasattr(response, "content") else str(response)
 
     return {

@@ -60,7 +60,7 @@ export function useAudioRecorder() {
   }, []);
 
   // Stop recording + upload to server
-  const stopAndUpload = useCallback(async (sessionId: string): Promise<boolean> => {
+  const stopAndUpload = useCallback(async (sessionId: string, token: string): Promise<boolean> => {
     const blob = await stop();
     if (!blob || blob.size < 1000) return false; // too small = nothing recorded
 
@@ -70,6 +70,7 @@ export function useAudioRecorder() {
       const formData = new FormData();
       formData.append("audio", blob, `recording.${ext}`);
       formData.append("sessionId", sessionId);
+      formData.append("token", token);
 
       const res = await fetch("/api/interview/public/audio", {
         method: "POST",

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { uploadToS3 } from "@/lib/s3";
 import { rateLimit, RATE_LIMITS, getIP, rateLimitResponse } from "@/lib/rate-limit";
+import { verifyInviteToken } from "@/lib/candidateInvite";
 
 // Public endpoint — receives audio blob from candidate, uploads to S3
 export async function POST(req: NextRequest) {
@@ -11,9 +12,14 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const audioFile = formData.get("audio") as File | null;
     const sessionId = formData.get("sessionId") as string | null;
+    const token = formData.get("token") as string | null;
 
     if (!audioFile || !sessionId) {
       return NextResponse.json({ error: "Missing audio or sessionId" }, { status: 400 });
+    }
+
+    if (!(await verifyInviteToken(sessionId, token))) {
+      return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
     }
 
     // Max 50MB

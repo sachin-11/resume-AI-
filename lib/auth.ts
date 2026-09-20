@@ -4,6 +4,7 @@ import GoogleProvider from "next-auth/providers/google";
 import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import type { UserRole } from "@/lib/permissions";
+import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 // ── Super admin email — only this account gets admin role ────────
 const SUPER_ADMIN_EMAIL = "rajeshsachin786@gmail.com";
@@ -45,8 +46,19 @@ export const authOptions: NextAuthOptions = {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) return null;
+
+        // Rate-limit by IP + email so credential-stuffing/brute-force can't
+        // hammer the login form — this endpoint had no throttling at all before.
+        const forwardedFor = req.headers?.["x-forwarded-for"];
+        const ip = (typeof forwardedFor === "string" ? forwardedFor.split(",")[0].trim() : null)
+          ?? req.headers?.["x-real-ip"]
+          ?? "unknown";
+        const limited = rateLimit(`login:${ip}:${credentials.email.toLowerCase()}`, RATE_LIMITS.login);
+        if (!limited.success) {
+          throw new Error("Too many login attempts. Please try again in a few minutes.");
+        }
 
         const user = await db.user.findUnique({
           where: { email: credentials.email },

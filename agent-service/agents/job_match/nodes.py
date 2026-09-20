@@ -7,7 +7,7 @@ Flow:
 from agents.shared.llm import get_llm, safe_json_parse
 
 
-def parse_jd(state: dict) -> dict:
+async def parse_jd(state: dict) -> dict:
     """Node 1: Extract structured intelligence from the job description."""
     llm = get_llm()
 
@@ -28,7 +28,7 @@ culture_signals: infer company culture from language, perks, tone
 Job Description:
 {state.get('job_description', '')[:3000]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {
@@ -50,7 +50,7 @@ Job Description:
     }
 
 
-def deep_match(state: dict) -> dict:
+async def deep_match(state: dict) -> dict:
     """Node 2: Deep semantic fit analysis with competitive positioning."""
     llm = get_llm()
 
@@ -85,7 +85,7 @@ Role: {state.get('jd_title', '')} at {state.get('jd_company', '')}
 Candidate Resume (excerpt):
 {state.get('resume_text', '')[:2500]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {
@@ -108,7 +108,7 @@ Candidate Resume (excerpt):
     }
 
 
-def mock_interview(state: dict) -> dict:
+async def mock_interview(state: dict) -> dict:
     """Node 3: Generate 5 highly targeted mock interview questions with model answers."""
     llm = get_llm()
 
@@ -137,7 +137,7 @@ Role: {state.get('jd_title', '')} at {state.get('jd_company', '')}
 Candidate Resume (excerpt):
 {state.get('resume_text', '')[:1500]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {"questions": []}
@@ -150,7 +150,7 @@ Candidate Resume (excerpt):
     }
 
 
-def salary_insight(state: dict) -> dict:
+async def salary_insight(state: dict) -> dict:
     """Node 4: Estimate salary range and provide negotiation intelligence."""
     llm = get_llm()
 
@@ -178,7 +178,7 @@ Culture signals: {state.get('jd_culture_signals', [])}
 Resume experience excerpt:
 {state.get('resume_text', '')[:800]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {
@@ -197,7 +197,7 @@ Resume experience excerpt:
     }
 
 
-def strategy(state: dict) -> dict:
+async def strategy(state: dict) -> dict:
     """Node 5: Build application strategy with timing, referral, and LinkedIn tips."""
     llm = get_llm()
 
@@ -234,7 +234,7 @@ Red flags in JD: {red_flags}
 Critical gaps: {state.get('critical_gaps', [])}
 Competitive edge: {state.get('competitive_edge', [])}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, 'content') else str(response),
         {

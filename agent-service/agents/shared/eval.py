@@ -9,7 +9,7 @@ swap for real `ragas` if you need publication-grade eval numbers.
 from agents.shared.llm import get_llm, safe_json_parse
 
 
-def evaluate_rag_answer(question: str, context_chunks: list, answer: str) -> dict:
+async def evaluate_rag_answer(question: str, context_chunks: list, answer: str) -> dict:
     """Score an answer for faithfulness (grounded in context, no hallucination)
     and answer relevancy (actually addresses the question)."""
     if not context_chunks:
@@ -38,7 +38,7 @@ Question: {question}
 Answer:
 {answer[:1500]}"""
 
-    response = llm.invoke(prompt)
+    response = await llm.ainvoke(prompt)
     result = safe_json_parse(
         response.content if hasattr(response, "content") else str(response),
         {"faithfulness": 0.5, "answer_relevancy": 0.5, "reasoning": "Eval parse failed"},
