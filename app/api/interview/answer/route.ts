@@ -31,7 +31,10 @@ export async function POST(req: NextRequest) {
 
     const [createdAnswer, { confidence, followupText }] = await Promise.all([
       db.answer.create({ data: { questionId, text: answerText } }),
-      analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm),
+      analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm, {
+        userId: session.user.id,
+        sessionId,
+      }),
     ]);
 
     await db.answer.update({

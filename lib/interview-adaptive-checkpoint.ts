@@ -124,7 +124,9 @@ export async function runAdaptiveCheckpoint(params: {
         language,
         personaPrompt: persona.systemPrompt,
         ragContext,
-      })
+      }),
+      undefined,
+      { userId, sessionId, feature: "adaptive-checkpoint" }
     );
     const parsed = safeJsonParse<GeneratedQuestion[]>(raw, []);
     const pool = parsed.length >= count ? parsed.slice(0, count) : null;

@@ -1,4 +1,4 @@
-import { callGroq } from "@/lib/groq";
+import { callGroq, type AiCallContext } from "@/lib/groq";
 import {
   FOLLOWUP_SYSTEM,
   CONFIDENCE_SYSTEM,
@@ -99,7 +99,8 @@ export function decideFollowupMode(c: ConfidenceResult): AdaptiveFollowupMode | 
 export async function analyzeAnswerAndMaybeFollowup(
   questionText: string,
   answerText: string,
-  hasLlm: boolean
+  hasLlm: boolean,
+  context?: Pick<AiCallContext, "userId" | "sessionId">
 ): Promise<{ confidence: ConfidenceResult; followupText: string | null }> {
   if (!hasLlm) {
     return { confidence: FALLBACK_CONFIDENCE, followupText: null };
@@ -107,7 +108,9 @@ export async function analyzeAnswerAndMaybeFollowup(
 
   const confidenceRaw = await callGroq(
     CONFIDENCE_SYSTEM,
-    confidenceAnalysisPrompt(questionText, answerText)
+    confidenceAnalysisPrompt(questionText, answerText),
+    undefined,
+    { ...context, feature: "confidence-analysis" }
   ).catch(() => null);
 
   const confidence: ConfidenceResult = confidenceRaw
@@ -121,7 +124,9 @@ export async function analyzeAnswerAndMaybeFollowup(
 
   const followupText = await callGroq(
     FOLLOWUP_SYSTEM,
-    adaptiveFollowupPrompt(questionText, answerText, followupMode)
+    adaptiveFollowupPrompt(questionText, answerText, followupMode),
+    undefined,
+    { ...context, feature: "adaptive-followup" }
   )
     .then((t) => t.trim())
     .catch(() => null);

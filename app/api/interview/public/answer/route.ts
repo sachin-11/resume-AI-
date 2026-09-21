@@ -42,7 +42,10 @@ export async function POST(req: NextRequest) {
       db.answer.create({
         data: { questionId, text: answerText },
       }),
-      analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm),
+      analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm, {
+        userId: session.userId,
+        sessionId,
+      }),
     ]);
 
     await db.answer.update({
