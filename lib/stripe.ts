@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { db } from "@/lib/db";
 
 // Lazy init — only on server side
 let _stripe: Stripe | null = null;
@@ -89,4 +90,50 @@ export function canCreateInterview(plan: string, interviewsThisMonth: number): b
 export function getRemainingInterviews(plan: string, interviewsThisMonth: number): number {
   if (plan === "pro" || plan === "enterprise") return Infinity;
   return Math.max(0, 5 - interviewsThisMonth);
+}
+
+/**
+ * Atomically checks the monthly limit and reserves a slot in one DB round-trip
+ * (row-locked via FOR UPDATE inside a transaction). A plain check-then-increment
+ * lets two concurrent create requests both read the same count before either
+ * writes, letting free-plan users create more than their monthly cap.
+ * Call releaseInterviewSlot if interview creation fails after this succeeds.
+ */
+export async function reserveInterviewSlot(userId: string): Promise<{ ok: boolean }> {
+  return db.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ plan: string; interviewsThisMonth: number; monthResetAt: Date | null }[]>`
+      SELECT plan, "interviewsThisMonth", "monthResetAt" FROM "User" WHERE id = ${userId} FOR UPDATE
+    `;
+    const user = rows[0];
+    if (!user) return { ok: false };
+
+    const now = new Date();
+    const isNewMonth =
+      !user.monthResetAt ||
+      now.getMonth() !== user.monthResetAt.getMonth() ||
+      now.getFullYear() !== user.monthResetAt.getFullYear();
+    const currentCount = isNewMonth ? 0 : user.interviewsThisMonth;
+
+    if (!canCreateInterview(user.plan, currentCount)) {
+      if (isNewMonth) {
+        await tx.user.update({ where: { id: userId }, data: { interviewsThisMonth: 0, monthResetAt: now } });
+      }
+      return { ok: false };
+    }
+
+    await tx.user.update({
+      where: { id: userId },
+      data: isNewMonth
+        ? { interviewsThisMonth: 1, monthResetAt: now }
+        : { interviewsThisMonth: { increment: 1 } },
+    });
+
+    return { ok: true };
+  });
+}
+
+export async function releaseInterviewSlot(userId: string): Promise<void> {
+  await db.user
+    .update({ where: { id: userId }, data: { interviewsThisMonth: { decrement: 1 } } })
+    .catch((err) => console.error("[RELEASE_INTERVIEW_SLOT]", err));
 }

@@ -38,13 +38,26 @@ export async function POST(req: NextRequest) {
 
     const hasLlm = Boolean(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY);
 
-    const [createdAnswer, { confidence, followupText }] = await Promise.all([
-      db.answer.create({
-        data: { questionId, text: answerText },
-      }),
+    const createdAnswer = await db.answer.create({
+      data: { questionId, text: answerText },
+    });
+
+    // Confidence/follow-up analysis and the adaptive-checkpoint regen call are
+    // independent (checkpoint only needs createdAnswer committed, done above) —
+    // run them concurrently so a live submit doesn't stack 3 sequential Groq
+    // round-trips (each up to ~90s with the fallback chain) on one request.
+    const [{ confidence, followupText }, adaptive] = await Promise.all([
       analyzeAnswerAndMaybeFollowup(question.text, answerText, hasLlm, {
         userId: session.userId,
         sessionId,
+      }),
+      runAdaptiveCheckpoint({
+        sessionId,
+        userId: session.userId,
+        hasLlm,
+      }).catch((err) => {
+        console.error("[PUBLIC_ADAPTIVE_CHECKPOINT]", err);
+        return { applied: false } as Awaited<ReturnType<typeof runAdaptiveCheckpoint>>;
       }),
     ]);
 
@@ -74,17 +87,6 @@ export async function POST(req: NextRequest) {
       } catch {
         // follow-up is optional
       }
-    }
-
-    let adaptive: Awaited<ReturnType<typeof runAdaptiveCheckpoint>> = { applied: false };
-    try {
-      adaptive = await runAdaptiveCheckpoint({
-        sessionId,
-        userId: session.userId,
-        hasLlm,
-      });
-    } catch (err) {
-      console.error("[PUBLIC_ADAPTIVE_CHECKPOINT]", err);
     }
 
     return NextResponse.json({ success: true, followupQuestion, confidence, adaptive });

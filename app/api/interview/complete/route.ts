@@ -12,6 +12,10 @@ export async function POST(req: NextRequest) {
 
     const { sessionId } = await req.json();
 
+    if (!sessionId || typeof sessionId !== "string") {
+      return NextResponse.json({ error: "sessionId required" }, { status: 400 });
+    }
+
     await db.interviewSession.updateMany({
       where: { id: sessionId, userId: session.user.id },
       data: { status: "completed" },

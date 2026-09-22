@@ -9,10 +9,12 @@ import { GeneratedQuestion } from "@/types";
 import { interviewSetupSchema } from "@/lib/validations";
 import { MOCK_QUESTIONS, buildMockPanelQuestions } from "@/lib/mockData";
 import { getPersona } from "@/lib/personas";
-import { canCreateInterview } from "@/lib/stripe";
+import { reserveInterviewSlot, releaseInterviewSlot } from "@/lib/stripe";
 import { buildRAGContext } from "@/lib/rag";
+import { Prisma } from "@prisma/client";
 
 export async function POST(req: NextRequest) {
+  let reservedUserId: string | null = null;
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
@@ -31,22 +33,15 @@ export async function POST(req: NextRequest) {
     } = parsed.data;
     const persona = getPersona(personaId ?? "friendly");
 
-    // ── Plan limit check ─────────────────────────────────────
-    const user = await db.user.findUnique({
-      where: { id: session.user.id },
-      select: { plan: true, interviewsThisMonth: true, monthResetAt: true },
-    });
-
-    // Reset monthly count if new month
-    const now = new Date();
-    if (!user?.monthResetAt || now.getMonth() !== user.monthResetAt.getMonth() || now.getFullYear() !== user.monthResetAt.getFullYear()) {
-      await db.user.update({ where: { id: session.user.id }, data: { interviewsThisMonth: 0, monthResetAt: now } });
-    } else if (!canCreateInterview(user?.plan ?? "free", user?.interviewsThisMonth ?? 0)) {
+    // ── Plan limit check (atomic reserve, closes the check-then-increment race) ──
+    const reservation = await reserveInterviewSlot(session.user.id);
+    if (!reservation.ok) {
       return NextResponse.json({
         error: "Monthly interview limit reached. Upgrade to Pro for unlimited interviews.",
         limitReached: true,
       }, { status: 403 });
     }
+    reservedUserId = session.user.id;
 
     let resumeText = "";
     if (resumeId) {
@@ -196,19 +191,30 @@ function solve(input) {
       WHERE id = ${interviewSession.id}
     `;
 
-    // Update question new fields via raw SQL
-    for (const q of questions) {
-      const dbQ = interviewSession.questions.find((dq) => dq.orderIndex === q.orderIndex);
-      if (!dbQ) continue;
-      if (q.panelAgent || q.starterCode || q.codeLanguage) {
-        await db.$executeRaw`
-          UPDATE "Question"
-          SET "panelAgent" = ${q.panelAgent ?? null},
-              "starterCode" = ${q.starterCode ?? null},
-              "codeLanguage" = ${q.codeLanguage ?? null}
-          WHERE id = ${dbQ.id}
-        `;
-      }
+    // Update question new fields via raw SQL — batched into one statement
+    // instead of one round-trip per question (latency scaled with questionCount).
+    const rowsToUpdate = questions
+      .map((q) => {
+        const dbQ = interviewSession.questions.find((dq) => dq.orderIndex === q.orderIndex);
+        if (!dbQ || !(q.panelAgent || q.starterCode || q.codeLanguage)) return null;
+        return { id: dbQ.id, panelAgent: q.panelAgent ?? null, starterCode: q.starterCode ?? null, codeLanguage: q.codeLanguage ?? null };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+
+    if (rowsToUpdate.length > 0) {
+      const values = Prisma.join(
+        rowsToUpdate.map(
+          (r) => Prisma.sql`(${r.id}::text, ${r.panelAgent}::text, ${r.starterCode}::text, ${r.codeLanguage}::text)`
+        )
+      );
+      await db.$executeRaw`
+        UPDATE "Question" AS q
+        SET "panelAgent" = v.panel_agent,
+            "starterCode" = v.starter_code,
+            "codeLanguage" = v.code_language
+        FROM (VALUES ${values}) AS v(id, panel_agent, starter_code, code_language)
+        WHERE q.id = v.id
+      `;
     }
 
     // Re-fetch with updated fields
@@ -217,14 +223,10 @@ function solve(input) {
       include: { questions: { orderBy: { orderIndex: "asc" } } },
     });
 
-    // Increment monthly interview count
-    await db.user.update({
-      where: { id: session.user.id },
-      data: { interviewsThisMonth: { increment: 1 } },
-    });
-
     return NextResponse.json({ session: updatedSession ?? interviewSession }, { status: 201 });
   } catch (err) {
-    console.error("[INTERVIEW_CREATE]", err);    return NextResponse.json({ error: "Failed to create interview" }, { status: 500 });
+    console.error("[INTERVIEW_CREATE]", err);
+    if (reservedUserId) await releaseInterviewSlot(reservedUserId);
+    return NextResponse.json({ error: "Failed to create interview" }, { status: 500 });
   }
 }

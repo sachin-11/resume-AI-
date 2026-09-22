@@ -245,11 +245,23 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
       return;
     }
 
-    await fetch("/api/interview/public/answer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ questionId: currentQ.id, answerText: text.trim(), sessionId, token }),
-    });
+    try {
+      const res = await fetch("/api/interview/public/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ questionId: currentQ.id, answerText: text.trim(), sessionId, token }),
+      });
+      if (!res.ok) throw new Error(`Answer submit failed: ${res.status}`);
+    } catch (err) {
+      console.error("[SUBMIT_ANSWER]", err);
+      setMessages((p) => [...p, {
+        id: `error-${Date.now()}`,
+        role: "assistant",
+        content: "Hmm, that didn't go through — check your connection and try again.",
+      }]);
+      setSubmitting(false);
+      return;
+    }
 
     const next = currentIndex + 1;
     if (next < questions.length) {
@@ -277,14 +289,20 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
     const photoDataUrl = capturePhoto();
 
     // Stop recording + upload audio + complete API — all in parallel
-    await Promise.all([
-      fetch("/api/interview/public/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, token, action: "complete" }),
-      }),
-      stopAndUpload(sessionId, token).catch(() => {}),
-    ]);
+    try {
+      await Promise.all([
+        fetch("/api/interview/public/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId, token, action: "complete" }),
+        }),
+        stopAndUpload(sessionId, token).catch(() => {}),
+      ]);
+    } catch (err) {
+      console.error("[FINISH_INTERVIEW]", err);
+    } finally {
+      setFinishing(false);
+    }
 
     // Save photo if captured (non-blocking)
     if (photoDataUrl) {
