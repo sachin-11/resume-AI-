@@ -189,11 +189,11 @@ export async function sendInterviewReminder({
 // ── 2. Interview Completed → Recruiter Alert ─────────────────────
 export async function sendRecruiterAlert({
   to, recruiterName, candidateName, candidateEmail, role,
-  overallScore, tabSwitchCount, dashboardUrl,
+  overallScore, tabSwitchCount, dashboardUrl, isFallback,
 }: {
   to: string; recruiterName: string; candidateName: string;
   candidateEmail: string; role: string; overallScore: number;
-  tabSwitchCount: number; dashboardUrl: string;
+  tabSwitchCount: number; dashboardUrl: string; isFallback?: boolean;
 }) {
   const transporter = getTransporter();
   const scoreColor = overallScore >= 70 ? "#22c55e" : overallScore >= 50 ? "#eab308" : "#ef4444";
@@ -203,6 +203,7 @@ export async function sendRecruiterAlert({
     <span class="tag" style="background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3)">🔔 New Submission</span>
     <p>Hello <strong>${recruiterName || "Recruiter"}</strong>,</p>
     <p>A candidate has just completed their AI interview. Here's the summary:</p>
+    ${isFallback ? `<div class="box" style="border-color:rgba(234,179,8,.4)"><span style="color:#eab308;font-size:13px">⚠️ AI scoring was unavailable for this session — the score below is a placeholder, not a real evaluation. Please review the transcript manually.</span></div>` : ""}
     <div class="box">
       <div class="row"><span class="lbl">Candidate</span><span class="val">${candidateName || candidateEmail}</span></div>
       <div class="row"><span class="lbl">Email</span><span class="val">${candidateEmail}</span></div>
@@ -216,7 +217,7 @@ export async function sendRecruiterAlert({
   await transporter.sendMail({
     from: `"AI Resume Coach" <${process.env.SMTP_USER}>`,
     to,
-    subject: `🔔 ${candidateName || candidateEmail} completed interview — Score: ${overallScore}/100`,
+    subject: `${isFallback ? "⚠️ [Score unavailable] " : "🔔 "}${candidateName || candidateEmail} completed interview — Score: ${overallScore}/100`,
     html: emailShell("🔔", "Interview Completed", `${candidateName || candidateEmail} has finished their interview`, body),
   });
 }
@@ -224,12 +225,12 @@ export async function sendRecruiterAlert({
 // ── 3. Score Report → Candidate ──────────────────────────────────
 export async function sendScoreReport({
   to, candidateName, role, overallScore, technicalScore,
-  communicationScore, confidenceScore, strengths, weakAreas, summary,
+  communicationScore, confidenceScore, strengths, weakAreas, summary, isFallback,
 }: {
   to: string; candidateName: string; role: string;
   overallScore: number; technicalScore: number;
   communicationScore: number; confidenceScore: number;
-  strengths: string[]; weakAreas: string[]; summary: string;
+  strengths: string[]; weakAreas: string[]; summary: string; isFallback?: boolean;
 }) {
   const transporter = getTransporter();
   const scoreColor = overallScore >= 70 ? "#22c55e" : overallScore >= 50 ? "#eab308" : "#ef4444";
@@ -242,6 +243,7 @@ export async function sendScoreReport({
     <span class="tag" style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)">📊 Your Results</span>
     <p>Hello <strong>${candidateName || "Candidate"}</strong>,</p>
     <p>Thank you for completing your AI interview for the <strong>${role}</strong> position. Here are your results:</p>
+    ${isFallback ? `<p style="color:#eab308;font-size:13px">⚠️ Our AI scoring service was temporarily unavailable, so the scores below are placeholders and don't reflect your actual performance. The recruiter has been notified to review your responses manually.</p>` : ""}
     <div class="score" style="color:${scoreColor}">${overallScore}<span style="font-size:20px;color:#64748b">/100</span></div>
     <p style="text-align:center;font-size:16px;font-weight:700;color:${scoreColor};margin-top:0">${grade}</p>
     <div class="box">

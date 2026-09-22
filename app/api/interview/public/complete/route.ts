@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { callGroq } from "@/lib/groq";
 import { FEEDBACK_SYSTEM, feedbackPrompt } from "@/lib/prompts";
-import { safeJsonParse } from "@/lib/utils";
+import { safeJsonParse, clampScore } from "@/lib/utils";
 import { FeedbackReport } from "@/types";
 import { MOCK_FEEDBACK } from "@/lib/mockData";
 import { sendRecruiterAlert, sendScoreReport } from "@/lib/mailer";
@@ -103,18 +103,31 @@ export async function POST(req: NextRequest) {
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 
+    // safeJsonParse returns the exact `fallback` reference on parse failure,
+    // same as the explicit MOCK_FEEDBACK assignment above — either way this
+    // is canned demo data, not a real AI report.
+    const isFallback = feedback === MOCK_FEEDBACK;
+
+    // Guard against malformed AI JSON (missing/NaN/out-of-range fields)
+    // reaching the DB, emails, or webhooks as-is.
+    const overallScore = clampScore(feedback.overallScore, MOCK_FEEDBACK.overallScore);
+    const technicalScore = clampScore(feedback.technicalScore, MOCK_FEEDBACK.technicalScore);
+    const communicationScore = clampScore(feedback.communicationScore, MOCK_FEEDBACK.communicationScore);
+    const confidenceScore = clampScore(feedback.confidenceScore, MOCK_FEEDBACK.confidenceScore);
+
     await db.feedbackReport.create({
       data: {
         sessionId,
-        overallScore: feedback.overallScore,
-        technicalScore: feedback.technicalScore,
-        communicationScore: feedback.communicationScore,
-        confidenceScore: feedback.confidenceScore,
+        overallScore,
+        technicalScore,
+        communicationScore,
+        confidenceScore,
         strengths: feedback.strengths,
         weakAreas: feedback.weakAreas,
         betterAnswers: feedback.betterAnswers as object[],
         improvementRoadmap: feedback.improvementRoadmap,
         summary: feedback.summary,
+        isFallback,
       },
     });
 
@@ -135,9 +148,10 @@ export async function POST(req: NextRequest) {
           candidateName: invite.name ?? "",
           candidateEmail: invite.email,
           role: invite.campaign.role,
-          overallScore: feedback.overallScore,
+          overallScore,
           tabSwitchCount: interviewSession.tabSwitchCount ?? 0,
           dashboardUrl: `${appUrl}/campaigns`,
+          isFallback,
         }).catch((e) => console.error("[RECRUITER_ALERT]", e));
       }
 
@@ -146,13 +160,14 @@ export async function POST(req: NextRequest) {
         to: invite.email,
         candidateName: invite.name ?? "",
         role: invite.campaign.role,
-        overallScore: feedback.overallScore,
-        technicalScore: feedback.technicalScore,
-        communicationScore: feedback.communicationScore,
-        confidenceScore: feedback.confidenceScore,
+        overallScore,
+        technicalScore,
+        communicationScore,
+        confidenceScore,
         strengths: feedback.strengths,
         weakAreas: feedback.weakAreas,
         summary: feedback.summary,
+        isFallback,
       }).catch((e) => console.error("[SCORE_REPORT]", e));
     }
 
@@ -167,20 +182,21 @@ export async function POST(req: NextRequest) {
           candidateEmail: invite.email,
           role: invite.campaign.role,
           campaignTitle: invite.campaign.title,
-          overallScore: feedback.overallScore,
-          technicalScore: feedback.technicalScore,
-          communicationScore: feedback.communicationScore,
-          confidenceScore: feedback.confidenceScore,
+          overallScore,
+          technicalScore,
+          communicationScore,
+          confidenceScore,
           tabSwitchCount: interviewSession.tabSwitchCount ?? 0,
-          passed: feedback.overallScore >= 60,
+          passed: overallScore >= 60,
           shortlisted: false,
           dashboardUrl: `${appUrl}/campaigns`,
           sessionId,
+          isFallback,
         },
       };
 
       void dispatchWebhooks(invite.campaign.userId, "interview_completed", webhookPayload);
-      void dispatchScoreThresholdWebhooks(invite.campaign.userId, feedback.overallScore, webhookPayload);
+      void dispatchScoreThresholdWebhooks(invite.campaign.userId, overallScore, webhookPayload);
     }
 
     return NextResponse.json({ success: true });

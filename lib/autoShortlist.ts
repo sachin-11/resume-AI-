@@ -212,6 +212,7 @@ export async function runAutoShortlist({
             shortlisted: true,
             dashboardUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/job-match`,
             sessionId: match.resumeId,
+            isFallback: false,
           },
         });
         result.webhookFired = true;

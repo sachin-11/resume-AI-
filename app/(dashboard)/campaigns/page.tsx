@@ -24,6 +24,7 @@ interface Invite {
   integrityFlag?: "clean" | "warning" | "suspicious";
   cameraEverEnabled?: boolean;
   faceDetectionActive?: boolean;
+  isFallbackScore?: boolean;
   proctoring?: {
     multipleFaces: number; noFace: number; lookingAway: number;
     noise: number; copyPaste: number;
@@ -757,6 +758,14 @@ export default function CampaignsPage() {
                               <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                                 {inv.score !== null && (
                                   <span className={`text-sm font-bold ${getScoreColor(inv.score)}`}>{inv.score}/100</span>
+                                )}
+                                {inv.isFallbackScore && (
+                                  <span
+                                    title="AI scoring was unavailable for this session — this score is a placeholder, not a real evaluation. Review the transcript manually."
+                                    className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-yellow-500/15 border-yellow-500/40 text-yellow-400"
+                                  >
+                                    ⚠️ Score unavailable
+                                  </span>
                                 )}
                                 {inv.integrityFlag && inv.integrityFlag !== "clean" && (
                                   <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold border ${inv.integrityFlag === "suspicious" ? "bg-red-500/20 border-red-500/50 text-red-400" : "bg-yellow-500/15 border-yellow-500/40 text-yellow-400"}`}>

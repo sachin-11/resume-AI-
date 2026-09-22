@@ -222,6 +222,7 @@ model FeedbackReport {
   betterAnswers       Json
   improvementRoadmap  String[]
   summary             String
+  isFallback          Boolean          @default(false) // true when AI feedback failed/was unavailable and MOCK_FEEDBACK was saved instead
   createdAt           DateTime         @default(now())
   session             InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 

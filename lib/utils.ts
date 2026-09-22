@@ -79,6 +79,13 @@ export function getRoundTypeLabel(type: string): string {
   return labels[type] ?? type;
 }
 
+// Clamp an AI-returned score to a valid 0-100 integer, falling back on
+// NaN/undefined/out-of-range values instead of letting them reach the DB.
+export function clampScore(n: unknown, fallback: number): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
 export function safeJsonParse<T>(str: string, fallback: T): T {
   try {
     // Extract JSON from markdown code blocks if present

@@ -36,7 +36,7 @@ export async function GET(
         select: {
           overallScore: true, technicalScore: true,
           communicationScore: true, confidenceScore: true,
-          strengths: true, weakAreas: true, summary: true,
+          strengths: true, weakAreas: true, summary: true, isFallback: true,
         },
       }),
       db.interviewSession.findUnique({

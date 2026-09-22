@@ -23,6 +23,7 @@ export interface WebhookPayload {
     shortlisted: boolean;     // score >= threshold
     dashboardUrl: string;
     sessionId: string;
+    isFallback: boolean;   // true if AI feedback failed/unavailable and scores are canned placeholders
   };
 }
 

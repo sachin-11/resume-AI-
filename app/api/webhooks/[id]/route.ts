@@ -68,6 +68,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       shortlisted: true,
       dashboardUrl: `${appUrl}/campaigns`,
       sessionId: "test-session-id",
+      isFallback: false,
     },
   };
 

@@ -17,7 +17,7 @@ interface Candidate {
   feedback: {
     overallScore: number; technicalScore: number;
     communicationScore: number; confidenceScore: number;
-    strengths: string[]; weakAreas: string[]; summary: string;
+    strengths: string[]; weakAreas: string[]; summary: string; isFallback: boolean;
   } | null;
   proctoring: {
     tabSwitches: number; integrityFlag: string;
@@ -131,6 +131,14 @@ function CompareContent() {
                 </div>
                 {isBest && <Badge className="bg-violet-600 text-white text-xs">🏆 Best Score</Badge>}
                 {!c.feedback && <Badge variant="secondary" className="text-xs">No feedback yet</Badge>}
+                {c.feedback?.isFallback && (
+                  <Badge
+                    title="AI scoring was unavailable for this session — this score is a placeholder, not a real evaluation."
+                    className="bg-yellow-500/15 border border-yellow-500/40 text-yellow-400 text-xs"
+                  >
+                    ⚠️ Score unavailable
+                  </Badge>
+                )}
               </CardContent>
             </Card>
           );

@@ -31,6 +31,22 @@ def get_langfuse():
     return _langfuse
 
 
+def _redact(value: Any) -> Any:
+    """Replace string content with a length placeholder, recursively.
+
+    input_data/output_data here carry candidate-facing text (FAQ questions,
+    interview messages, AI answers) that must not leave to this third-party
+    observability vendor. Only shape/size, not content, is preserved.
+    """
+    if isinstance(value, str):
+        return f"[redacted — {len(value)} chars]"
+    if isinstance(value, dict):
+        return {k: _redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
+
+
 def trace_guardrail(
     name: str,
     input_data: Any,
@@ -44,7 +60,9 @@ def trace_guardrail(
         return
     try:
         with lf.start_as_current_observation(
-            name=name, as_type="guardrail", input=input_data, output=output_data, metadata=metadata
+            name=name, as_type="guardrail",
+            input=_redact(input_data), output=_redact(output_data),
+            metadata=metadata,
         ):
             for score_name, score_value in (scores or {}).items():
                 lf.score_current_trace(name=score_name, value=score_value)

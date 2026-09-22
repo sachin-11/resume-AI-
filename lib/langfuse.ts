@@ -43,6 +43,11 @@ export interface LlmGenerationLog {
 /**
  * Log one LLM call as a Langfuse generation. Always safe to call — no-ops if unconfigured.
  * Awaits the flush so serverless functions (Vercel) don't get frozen mid-upload after responding.
+ *
+ * entry.input/output (resume text, interview transcripts, candidate answers) are
+ * NOT forwarded to Langfuse — that's candidate PII going to a third-party SaaS
+ * with no redaction or consent gate. Only lengths + usage/model metadata are
+ * sent; full content stays first-party (AiUsageLog) only.
  */
 export async function logGeneration(entry: LlmGenerationLog): Promise<void> {
   const lf = getLangfuse();
@@ -57,8 +62,8 @@ export async function logGeneration(entry: LlmGenerationLog): Promise<void> {
     trace.generation({
       name: entry.name,
       model: entry.model,
-      input: entry.input,
-      output: entry.output,
+      input: `[redacted — ${entry.input.length} chars]`,
+      output: `[redacted — ${entry.output.length} chars]`,
       usage: {
         input: entry.usage.promptTokens,
         output: entry.usage.completionTokens,

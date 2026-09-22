@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { callGroq } from "@/lib/groq";
 import { FEEDBACK_SYSTEM, feedbackPrompt } from "@/lib/prompts";
-import { safeJsonParse } from "@/lib/utils";
+import { safeJsonParse, clampScore } from "@/lib/utils";
 import { FeedbackReport } from "@/types";
 import { MOCK_FEEDBACK } from "@/lib/mockData";
 import { buildFeedbackRAGContext } from "@/lib/rag";
@@ -99,15 +99,27 @@ export async function POST(req: NextRequest) {
       feedback = safeJsonParse<FeedbackReport>(raw, MOCK_FEEDBACK);
     }
 
+    // safeJsonParse returns the exact `fallback` reference on parse failure,
+    // same as the explicit MOCK_FEEDBACK assignment above when GROQ_API_KEY
+    // is unset — either way this is canned demo data, not a real AI report.
+    const isFallback = feedback === MOCK_FEEDBACK;
+
+    // Guard against malformed AI JSON (missing/NaN/out-of-range fields)
+    // reaching the DB as-is.
+    const overallScoreRaw = clampScore(feedback.overallScore, MOCK_FEEDBACK.overallScore);
+    const technicalScoreRaw = clampScore(feedback.technicalScore, MOCK_FEEDBACK.technicalScore);
+    const communicationScore = clampScore(feedback.communicationScore, MOCK_FEEDBACK.communicationScore);
+    const confidenceScore = clampScore(feedback.confidenceScore, MOCK_FEEDBACK.confidenceScore);
+
     // Apply hint penalty to final scores
     const penaltyApplied = Math.min(hintPenalty, 30); // max 30 point penalty
     const report = await db.feedbackReport.create({
       data: {
         sessionId,
-        overallScore: Math.max(0, feedback.overallScore - penaltyApplied),
-        technicalScore: Math.max(0, feedback.technicalScore - Math.round(penaltyApplied * 0.7)),
-        communicationScore: feedback.communicationScore,
-        confidenceScore: feedback.confidenceScore,
+        overallScore: Math.max(0, overallScoreRaw - penaltyApplied),
+        technicalScore: Math.max(0, technicalScoreRaw - Math.round(penaltyApplied * 0.7)),
+        communicationScore,
+        confidenceScore,
         strengths: feedback.strengths,
         weakAreas: hintPenalty > 0
           ? [...feedback.weakAreas, `Used ${Math.round(hintPenalty / 5)} hint(s) during interview (−${penaltyApplied} pts)`]
@@ -117,6 +129,7 @@ export async function POST(req: NextRequest) {
         summary: hintPenalty > 0
           ? `${feedback.summary} Note: ${penaltyApplied} points deducted for using hints.`
           : feedback.summary,
+        isFallback,
       },
     });
 

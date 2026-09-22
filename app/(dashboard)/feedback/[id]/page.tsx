@@ -25,6 +25,7 @@ interface FeedbackData {
   betterAnswers: Array<{ question: string; improvedAnswer: string; candidateAnswer?: string }>;
   improvementRoadmap: string[];
   summary: string;
+  isFallback?: boolean;
   session: {
     title: string;
     role: string;
@@ -386,6 +387,18 @@ export default function FeedbackPage() {
           </Button>
         </div>
       </div>
+
+      {feedback.isFallback && (
+        <div className="flex items-start gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-4">
+          <AlertCircle className="h-5 w-5 text-yellow-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-yellow-400">AI scoring was unavailable for this session</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              The scores below are placeholders, not a real evaluation of your answers. This can happen when the AI provider is temporarily down. Please treat this report as informational only.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── SCORECARD ── */}
       <Card className={`border-2 ${grade.border}`}>

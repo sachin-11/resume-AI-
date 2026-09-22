@@ -124,17 +124,20 @@ export async function GET(
     sessionIds.length > 0
       ? db.feedbackReport.findMany({
           where: { sessionId: { in: sessionIds } },
-          select: { sessionId: true, overallScore: true },
-        }).then((rows) => new Map(rows.map((r) => [r.sessionId, r.overallScore])))
+          select: { sessionId: true, overallScore: true, isFallback: true },
+        }).then((rows) => new Map(rows.map((r) => [r.sessionId, r])))
       : Promise.resolve(new Map()),
   ]);
 
   const invitesWithScores = invites.map((inv) => {
     const sd = inv.sessionId ? sessionDataMap.get(inv.sessionId) : null;
-    const score = inv.sessionId ? (feedbackMap.get(inv.sessionId) ?? null) : null;
+    const fb = inv.sessionId ? feedbackMap.get(inv.sessionId) : null;
+    const score = fb?.overallScore ?? null;
     return {
       ...inv,
       score,
+      // AI feedback failed/unavailable — score is a canned placeholder, not a real evaluation.
+      isFallbackScore: fb?.isFallback ?? false,
       tabSwitchCount: sd?.tabSwitchCount ?? 0,
       hasAudio: !!sd?.audioKey,
       integrityFlag: sd?.integrityFlag ?? "clean",

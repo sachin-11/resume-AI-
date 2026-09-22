@@ -55,6 +55,7 @@ export async function PATCH(
 
       // Get feedback score if interview was completed
       let scores = { overall: 0, technical: 0, communication: 0, confidence: 0 };
+      let isFallback = false;
       if (invite.sessionId) {
         const feedback = await db.feedbackReport.findUnique({
           where: { sessionId: invite.sessionId },
@@ -63,6 +64,7 @@ export async function PATCH(
             technicalScore: true,
             communicationScore: true,
             confidenceScore: true,
+            isFallback: true,
           },
         });
         if (feedback) {
@@ -72,6 +74,7 @@ export async function PATCH(
             communication: feedback.communicationScore,
             confidence: feedback.confidenceScore,
           };
+          isFallback = feedback.isFallback;
         }
       }
 
@@ -102,6 +105,7 @@ export async function PATCH(
           shortlisted: true,
           dashboardUrl: `${appUrl}/campaigns`,
           sessionId: invite.sessionId ?? "",
+          isFallback,
         },
       };
 
