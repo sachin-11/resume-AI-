@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/permissions";
 import bcrypt from "bcryptjs";
 import { sendTeamInvite } from "@/lib/mailer";
+import { generateTempPassword } from "@/lib/temp-password";
 
 // GET — list team members
 export async function GET() {
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
     if (existing) return NextResponse.json({ error: "User already in team" }, { status: 400 });
   } else {
     // Create user with temp password
-    const tempPassword = Math.random().toString(36).slice(-8);
+    const tempPassword = generateTempPassword();
     const hashed = await bcrypt.hash(tempPassword, 10);
     invitedUser = await db.user.create({
       data: { email, name: name ?? "", password: hashed, role },

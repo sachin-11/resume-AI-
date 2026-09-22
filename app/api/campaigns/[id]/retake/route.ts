@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { generateTempPassword } from "@/lib/temp-password";
 import bcrypt from "bcryptjs";
 
 // Allow a candidate to retake — creates a new invite token, resets status
@@ -31,7 +32,7 @@ export async function POST(
       campaignId,
       email: invite.email,
       name: invite.name,
-      portalPassword: await bcrypt.hash(Math.random().toString(36).slice(-8), 10),
+      portalPassword: await bcrypt.hash(generateTempPassword(), 10),
     },
   });
 

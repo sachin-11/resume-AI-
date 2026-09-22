@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { sendInterviewInvite } from "@/lib/mailer";
+import { generateTempPassword } from "@/lib/temp-password";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 
@@ -54,7 +55,7 @@ export async function POST(
           campaignId,
           email: candidate.email,
           name: candidate.name ?? "",
-          portalPassword: await bcrypt.hash(Math.random().toString(36).slice(-8), 10),
+          portalPassword: await bcrypt.hash(generateTempPassword(), 10),
         },
       });
 
