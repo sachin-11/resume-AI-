@@ -121,6 +121,8 @@ model InterviewSession {
   adaptiveNote        String?
   panelInterview      Boolean    @default(false)
   pairProgramming     Boolean    @default(false)
+  cameraEverEnabled   Boolean    @default(false)
+  faceDetectionActive Boolean    @default(false)
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
   user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)

@@ -17,7 +17,10 @@ export async function POST(req: NextRequest) {
   if (!rl.success) return rateLimitResponse(rl);
   try {
     // sendBeacon sends as text/plain, fetch sends as application/json
-    let body: { sessionId?: string; token?: string; action?: string };
+    let body: {
+      sessionId?: string; token?: string; action?: string;
+      cameraEverEnabled?: boolean; faceDetectionActive?: boolean;
+    };
     const contentType = req.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       body = await req.json();
@@ -26,7 +29,7 @@ export async function POST(req: NextRequest) {
       body = JSON.parse(text);
     }
 
-    const { sessionId, token, action } = body;
+    const { sessionId, token, action, cameraEverEnabled, faceDetectionActive } = body;
 
     if (!sessionId) {
       return NextResponse.json({ error: "sessionId required" }, { status: 400 });
@@ -36,11 +39,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid or missing invite token" }, { status: 403 });
     }
 
+    // Best-effort proctoring-coverage flags — record whatever the client saw
+    // over the session so a "clean" integrity flag can't be mistaken for
+    // "camera/face monitoring actually ran" when it never did.
+    const coverageData = {
+      ...(cameraEverEnabled ? { cameraEverEnabled: true } : {}),
+      ...(faceDetectionActive ? { faceDetectionActive: true } : {}),
+    };
+
     // ── Abandoned (tab closed mid-interview) ──────────────────
     if (action === "abandon") {
       await db.interviewSession.updateMany({
         where: { id: sessionId, status: "active" },
-        data: { status: "abandoned" },
+        data: { status: "abandoned", ...coverageData },
       });
       await db.candidateInvite.updateMany({
         where: { token, sessionId },
@@ -52,7 +63,7 @@ export async function POST(req: NextRequest) {
     // ── Completed ─────────────────────────────────────────────
     await db.interviewSession.update({
       where: { id: sessionId },
-      data: { status: "completed" },
+      data: { status: "completed", ...coverageData },
     });
 
     await db.candidateInvite.updateMany({

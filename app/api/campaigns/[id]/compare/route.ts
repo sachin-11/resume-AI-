@@ -44,6 +44,7 @@ export async function GET(
         select: {
           tabSwitchCount: true, integrityFlag: true,
           multipleFacesCount: true, lookingAwayCount: true, copyPasteCount: true,
+          cameraEverEnabled: true, faceDetectionActive: true,
           questions: {
             where: { type: "main" },
             orderBy: { orderIndex: "asc" },
@@ -65,6 +66,8 @@ export async function GET(
         multipleFaces: session_data.multipleFacesCount,
         lookingAway: session_data.lookingAwayCount,
         copyPaste: session_data.copyPasteCount,
+        cameraEverEnabled: session_data.cameraEverEnabled,
+        faceDetectionActive: session_data.faceDetectionActive,
       } : null,
       answers: session_data?.questions.map((q) => ({
         question: q.text,

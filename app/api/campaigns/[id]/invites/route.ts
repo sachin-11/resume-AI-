@@ -117,7 +117,7 @@ export async function GET(
             id: true, tabSwitchCount: true, audioKey: true,
             multipleFacesCount: true, noFaceCount: true,
             lookingAwayCount: true, noiseCount: true, copyPasteCount: true,
-            integrityFlag: true,
+            integrityFlag: true, cameraEverEnabled: true, faceDetectionActive: true,
           },
         }).then((rows) => new Map(rows.map((r) => [r.id, r])))
       : Promise.resolve(new Map()),
@@ -138,6 +138,10 @@ export async function GET(
       tabSwitchCount: sd?.tabSwitchCount ?? 0,
       hasAudio: !!sd?.audioKey,
       integrityFlag: sd?.integrityFlag ?? "clean",
+      // Whether camera/face monitoring actually ran this session — a "clean"
+      // integrityFlag looks identical to "monitoring never ran" otherwise.
+      cameraEverEnabled: sd?.cameraEverEnabled ?? false,
+      faceDetectionActive: sd?.faceDetectionActive ?? false,
       proctoring: sd ? {
         multipleFaces: sd.multipleFacesCount,
         noFace: sd.noFaceCount,

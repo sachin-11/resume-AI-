@@ -41,6 +41,10 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
   const listeningRef = useRef(false);
   const speakingRef = useRef(false);
   const submittingRef = useRef(false);
+  // Session-long proctoring coverage — sent with complete/abandon so a "clean"
+  // integrity flag can't be mistaken for "camera/face monitoring actually ran".
+  const cameraEverEnabledRef = useRef(false);
+  const faceDetectionActiveRef = useRef(false);
 
   // ── Abandon on tab close ─────────────────────────────────────
   useEffect(() => {
@@ -50,7 +54,11 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
         // sendBeacon works even when tab is closing
         navigator.sendBeacon(
           "/api/interview/public/complete",
-          JSON.stringify({ sessionId, token, action: "abandon" })
+          JSON.stringify({
+            sessionId, token, action: "abandon",
+            cameraEverEnabled: cameraEverEnabledRef.current,
+            faceDetectionActive: faceDetectionActiveRef.current,
+          })
         );
       }
     }
@@ -66,33 +74,44 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [showTabWarning, setShowTabWarning] = useState(false);
   const tabSwitchRef = useRef(0);
+  // blur and visibilitychange both fire for the same real tab-switch (order/timing
+  // isn't guaranteed across browsers), so a shared debounce window collapses the
+  // pair into a single recorded violation instead of double-counting it.
+  const lastTabSwitchAtRef = useRef(0);
+  const TAB_SWITCH_DEDUPE_MS = 500;
 
   useEffect(() => {
     if (!sessionId) return;
 
-    function handleVisibilityChange() {
-      if (document.hidden && !doneRef.current) {
-        tabSwitchRef.current += 1;
-        setTabSwitchCount(tabSwitchRef.current);
-        setShowTabWarning(true);
+    function recordTabSwitch() {
+      const now = Date.now();
+      if (now - lastTabSwitchAtRef.current < TAB_SWITCH_DEDUPE_MS) return;
+      lastTabSwitchAtRef.current = now;
+
+      tabSwitchRef.current += 1;
+      setTabSwitchCount(tabSwitchRef.current);
+      setShowTabWarning(true);
+
+      if (typeof navigator.sendBeacon === "function") {
         navigator.sendBeacon(
           "/api/interview/public/tab-switch",
           JSON.stringify({ sessionId, token })
         );
-      }
-    }
-
-    function handleBlur() {
-      if (!doneRef.current && !document.hidden) {
-        tabSwitchRef.current += 1;
-        setTabSwitchCount(tabSwitchRef.current);
-        setShowTabWarning(true);
+      } else {
         fetch("/api/interview/public/tab-switch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionId, token }),
         }).catch(() => {});
       }
+    }
+
+    function handleVisibilityChange() {
+      if (document.hidden && !doneRef.current) recordTabSwitch();
+    }
+
+    function handleBlur() {
+      if (!doneRef.current) recordTabSwitch();
     }
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -140,9 +159,14 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
 
   // Start proctoring when camera turns on
   useEffect(() => {
-    if (camEnabled) startProctoring();
-    else stopProctoring();
-  }, [camEnabled, startProctoring, stopProctoring]);
+    if (camEnabled) {
+      cameraEverEnabledRef.current = true;
+      if (faceDetectionSupported) faceDetectionActiveRef.current = true;
+      startProctoring();
+    } else {
+      stopProctoring();
+    }
+  }, [camEnabled, faceDetectionSupported, startProctoring, stopProctoring]);
 
   // ── Audio Recorder ───────────────────────────────────────────
   const { start: startRecording, stopAndUpload, status: recorderStatus } = useAudioRecorder();
@@ -294,7 +318,11 @@ export function CandidateInterviewSession({ sessionId, token, candidateName, lan
         fetch("/api/interview/public/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, token, action: "complete" }),
+          body: JSON.stringify({
+            sessionId, token, action: "complete",
+            cameraEverEnabled: cameraEverEnabledRef.current,
+            faceDetectionActive: faceDetectionActiveRef.current,
+          }),
         }),
         stopAndUpload(sessionId, token).catch(() => {}),
       ]);

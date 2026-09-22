@@ -22,6 +22,7 @@ interface Candidate {
   proctoring: {
     tabSwitches: number; integrityFlag: string;
     multipleFaces: number; lookingAway: number; copyPaste: number;
+    cameraEverEnabled: boolean; faceDetectionActive: boolean;
   } | null;
   answers: Array<{ question: string; answer: string | null }>;
 }
@@ -190,6 +191,13 @@ function CompareContent() {
                       <p>Multiple faces: <span className={c.proctoring.multipleFaces > 0 ? "text-red-400" : "text-foreground"}>{c.proctoring.multipleFaces}</span></p>
                       <p>Looking away: <span className={c.proctoring.lookingAway > 3 ? "text-yellow-400" : "text-foreground"}>{c.proctoring.lookingAway}</span></p>
                       <p>Copy-paste: <span className={c.proctoring.copyPaste > 0 ? "text-red-400" : "text-foreground"}>{c.proctoring.copyPaste}</span></p>
+                      {!(c.proctoring.cameraEverEnabled && c.proctoring.faceDetectionActive) && (
+                        <p className="text-slate-400">
+                          {!c.proctoring.cameraEverEnabled
+                            ? "📷 Camera never enabled — no video monitoring"
+                            : "👁️ Face detection unsupported in candidate's browser"}
+                        </p>
+                      )}
                     </div>
                   </>
                 ) : <p className="text-xs text-muted-foreground">No data</p>}

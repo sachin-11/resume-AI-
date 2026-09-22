@@ -33,6 +33,7 @@ export function useProctoring({ sessionId, videoRef, enabled = true, onViolation
     integrityFlag: "clean",
   });
   const [latestEvent, setLatestEvent] = useState<ProctoringEvent | null>(null);
+  const [noiseDetectionActive, setNoiseDetectionActive] = useState(false);
 
   const statsRef = useRef(stats);
   const faceDetectorRef = useRef<unknown>(null);
@@ -159,7 +160,13 @@ export function useProctoring({ sessionId, videoRef, enabled = true, onViolation
           noiseFrames = 0;
         }
       }, 2000);
-    } catch { /* mic not available */ }
+      setNoiseDetectionActive(true);
+    } catch (err) {
+      // Mic permission denied/unavailable — surface it instead of failing silently,
+      // since a "clean" integrity flag otherwise looks identical to "never ran".
+      console.warn("[PROCTORING] Noise detection unavailable:", err);
+      setNoiseDetectionActive(false);
+    }
   }, [reportViolation]);
 
   // ── Copy-Paste Detection ─────────────────────────────────────
@@ -220,5 +227,5 @@ export function useProctoring({ sessionId, videoRef, enabled = true, onViolation
   const faceDetectionSupported = typeof window !== "undefined" &&
     !!(window as unknown as { FaceDetector?: unknown }).FaceDetector;
 
-  return { stats, latestEvent, start, stop, faceDetectionSupported };
+  return { stats, latestEvent, start, stop, faceDetectionSupported, noiseDetectionActive };
 }

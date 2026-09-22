@@ -22,6 +22,8 @@ interface Invite {
   createdAt: string; photoUrl: string | null; tabSwitchCount: number;
   hasAudio: boolean; sessionId: string | null;
   integrityFlag?: "clean" | "warning" | "suspicious";
+  cameraEverEnabled?: boolean;
+  faceDetectionActive?: boolean;
   proctoring?: {
     multipleFaces: number; noFace: number; lookingAway: number;
     noise: number; copyPaste: number;
@@ -769,6 +771,18 @@ export default function CampaignsPage() {
                                 {inv.proctoring && (inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste) > 0 && (
                                   <span className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-red-500/15 border-red-500/40 text-red-400">
                                     🔍 {inv.proctoring.multipleFaces + inv.proctoring.lookingAway + inv.proctoring.copyPaste}
+                                  </span>
+                                )}
+                                {inv.sessionId && !(inv.cameraEverEnabled && inv.faceDetectionActive) && (
+                                  <span
+                                    title={
+                                      !inv.cameraEverEnabled
+                                        ? "Candidate never enabled their camera — no video/face monitoring occurred, regardless of the integrity flag above."
+                                        : "This candidate's browser doesn't support face/gaze detection — only tab-switch and copy/paste were monitored."
+                                    }
+                                    className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-slate-500/15 border-slate-500/40 text-slate-400"
+                                  >
+                                    {!inv.cameraEverEnabled ? "📷 No camera" : "👁️ No face check"}
                                   </span>
                                 )}
                                 <Badge variant={inv.status === "completed" ? "success" : inv.status === "started" ? "warning" : inv.status === "abandoned" ? "destructive" : "secondary"}>
