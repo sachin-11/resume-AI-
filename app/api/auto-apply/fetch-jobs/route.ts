@@ -47,7 +47,9 @@ export async function POST(req: NextRequest) {
 
     // 🚀 Call Python LangGraph Auto Apply Agent!
     const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
-    const AGENT_SECRET = process.env.AGENT_SECRET ?? "dev-secret-change-in-production";
+    // No insecure fallback — an unset AGENT_SECRET must fail auth, not silently
+    // agree with agent-service on a well-known default sitting in public source.
+    const AGENT_SECRET = process.env.AGENT_SECRET ?? "";
 
     const agentRes = await fetch(`${AGENT_URL}/auto-apply`, {
       method: "POST",

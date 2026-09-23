@@ -93,6 +93,7 @@ export const RATE_LIMITS = {
   // Expensive authenticated routes (by userId)
   fetchJobs:       { limit: 10,  windowMs: 60 * 60 * 1000 },       // 10 per hour
   resumeUpload:    { limit: 10,  windowMs: 60 * 60 * 1000 },       // 10 per hour
+  bulkResumeUpload: { limit: 3,  windowMs: 60 * 60 * 1000 },       // 3 per hour — up to 50 files each
   aiGenerate:      { limit: 20,  windowMs: 60 * 60 * 1000 },       // 20 per hour (feedback, improve)
 } as const;
 

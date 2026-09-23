@@ -40,7 +40,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-AGENT_SECRET = os.getenv("AGENT_SECRET", "dev-secret-change-in-production")
+AGENT_SECRET = os.getenv("AGENT_SECRET")
+if not AGENT_SECRET:
+    print(
+        "[STARTUP WARNING] AGENT_SECRET is not set — this well-known default was "
+        "previously used as a fallback (visible in source, so effectively no auth). "
+        "All agent endpoints will now reject every request until AGENT_SECRET is set "
+        "identically on this service and on the Next.js app (AGENT_SECRET env var)."
+    )
 
 
 # ── Request / Response Models ────────────────────────────────────
@@ -61,7 +68,9 @@ class ImproveResumeResponse(BaseModel):
 
 # ── Auth check ───────────────────────────────────────────────────
 def verify_secret(x_agent_secret: Optional[str] = Header(None)):
-    if not x_agent_secret or not secrets.compare_digest(x_agent_secret, AGENT_SECRET):
+    # Fail closed: an unset AGENT_SECRET must lock the service down, never fall
+    # back to a shared default that's sitting in the public source of both sides.
+    if not AGENT_SECRET or not x_agent_secret or not secrets.compare_digest(x_agent_secret, AGENT_SECRET):
         raise HTTPException(status_code=401, detail="Invalid agent secret")
 
 

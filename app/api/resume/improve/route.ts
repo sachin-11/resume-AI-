@@ -33,12 +33,14 @@ export async function POST(req: NextRequest) {
 
   // Read env vars at runtime (not build time)
   const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
-  const AGENT_SECRET = process.env.AGENT_SECRET ?? "dev-secret-change-in-production";
+  const AGENT_SECRET = process.env.AGENT_SECRET;
 
-  // Check if agent service is configured
-  if (!process.env.AGENT_SERVICE_URL) {
+  // Check if agent service is configured — AGENT_SECRET is required too: without
+  // it we'd otherwise fall back to a well-known default that's visible in source
+  // on both sides, which is equivalent to no auth at all.
+  if (!process.env.AGENT_SERVICE_URL || !AGENT_SECRET) {
     return NextResponse.json({
-      error: "Agent service not configured. Set AGENT_SERVICE_URL in .env",
+      error: "Agent service not configured. Set AGENT_SERVICE_URL and AGENT_SECRET in .env",
       agentNotConfigured: true,
     }, { status: 503 });
   }

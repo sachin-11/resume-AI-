@@ -76,31 +76,46 @@ async function autoMatchAgainstAllJDs(userId: string, resumeId: string, rawText:
   });
   if (jds.length === 0) return;
 
-  for (const jd of jds) {
-    const jdResults = await matchAllResumes([{ id: resumeId, rawText }], jd.description);
-    const r = jdResults[0];
-    if (!r) continue;
+  // Batched + per-JD isolated: previously a sequential for-loop where one
+  // failing JD (e.g. a transient AI error) threw and silently skipped every
+  // JD after it in the list, with no record of which ones were missed.
+  const BATCH = 5;
+  let matched = 0;
+  for (let i = 0; i < jds.length; i += BATCH) {
+    const batch = jds.slice(i, i + BATCH);
+    await Promise.all(
+      batch.map(async (jd) => {
+        try {
+          const jdResults = await matchAllResumes([{ id: resumeId, rawText }], jd.description);
+          const r = jdResults[0];
+          if (!r) return;
 
-    await db.resumeMatch.upsert({
-      where: { jobDescriptionId_resumeId: { jobDescriptionId: jd.id, resumeId } },
-      create: {
-        jobDescriptionId: jd.id,
-        resumeId,
-        score: r.score,
-        matchedSkills: r.matchedSkills,
-        missingSkills: r.missingSkills,
-        summary: r.summary,
-        recommendation: r.recommendation,
-      },
-      update: {
-        score: r.score,
-        matchedSkills: r.matchedSkills,
-        missingSkills: r.missingSkills,
-        summary: r.summary,
-        recommendation: r.recommendation,
-      },
-    });
+          await db.resumeMatch.upsert({
+            where: { jobDescriptionId_resumeId: { jobDescriptionId: jd.id, resumeId } },
+            create: {
+              jobDescriptionId: jd.id,
+              resumeId,
+              score: r.score,
+              matchedSkills: r.matchedSkills,
+              missingSkills: r.missingSkills,
+              summary: r.summary,
+              recommendation: r.recommendation,
+            },
+            update: {
+              score: r.score,
+              matchedSkills: r.matchedSkills,
+              missingSkills: r.missingSkills,
+              summary: r.summary,
+              recommendation: r.recommendation,
+            },
+          });
+          matched++;
+        } catch (err) {
+          console.error(`[AUTO_MATCH] JD ${jd.id} failed:`, err);
+        }
+      })
+    );
   }
 
-  console.log(`[AUTO_MATCH] Resume ${resumeId} matched against ${jds.length} JD(s)`);
+  console.log(`[AUTO_MATCH] Resume ${resumeId} matched against ${matched}/${jds.length} JD(s)`);
 }

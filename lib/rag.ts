@@ -41,11 +41,27 @@ function isPineconeIndexMissingError(err: unknown): boolean {
   return false;
 }
 
+type EmbeddingProvider = "openai" | "pseudo";
+interface EmbeddingResult {
+  vector: number[];
+  provider: EmbeddingProvider;
+}
+
 // ── Groq embedding (using llama text-embedding model) ───────────
 // Groq doesn't have embeddings yet — use a simple TF-IDF-like hash
 // OR use OpenAI embeddings if available, else fallback to Groq chat for semantic similarity
-async function getEmbedding(text: string): Promise<number[]> {
-  // Try OpenAI embeddings first (best quality)
+//
+// IMPORTANT: pseudo-embed and OpenAI embeddings live in incompatible vector
+// spaces — cosine similarity between them is meaningless even when the
+// dimensions happen to match. Previously an OpenAI HTTP failure silently
+// fell through to pseudoEmbed, so a resume could end up with some chunks in
+// one space and some in the other, and later queries could compare across
+// spaces too, producing garbage scores with no error. Now: if OPENAI_API_KEY
+// is set, a failed call throws (caller decides whether to fail the whole
+// operation) instead of silently switching space; the caller tags every
+// vector with which provider produced it so retrieval can filter to only
+// the current provider's space.
+async function getEmbedding(text: string): Promise<EmbeddingResult> {
   if (process.env.OPENAI_API_KEY) {
     const res = await fetch("https://api.openai.com/v1/embeddings", {
       method: "POST",
@@ -56,12 +72,15 @@ async function getEmbedding(text: string): Promise<number[]> {
       body: JSON.stringify({ model: "text-embedding-3-small", input: text.slice(0, 8000) }),
     });
     const data = await res.json();
-    if (data.data?.[0]?.embedding) return data.data[0].embedding;
+    if (!data.data?.[0]?.embedding) {
+      throw new Error(`OpenAI embeddings failed: ${data.error?.message ?? res.status}`);
+    }
+    return { vector: data.data[0].embedding, provider: "openai" };
   }
 
   // Fallback: deterministic pseudo-embedding using character frequency
   // (Not semantic, but works for basic similarity without external API)
-  return pseudoEmbed(text);
+  return { vector: pseudoEmbed(text), provider: "pseudo" };
 }
 
 /**
@@ -114,15 +133,18 @@ export async function indexResume(resumeId: string, userId: string, resumeText: 
 
     const vectors = await Promise.all(
       chunks.map(async (chunk, i) => {
-        const embedding = await getEmbedding(chunk);
+        const { vector, provider } = await getEmbedding(chunk);
         return {
           id: `${resumeId}_chunk_${i}`,
-          values: embedding,
+          values: vector,
           metadata: {
             resumeId,
             userId,
             chunkIndex: i,
             text: chunk.slice(0, 1000), // Pinecone metadata limit
+            // Tags which vector space this chunk lives in — retrieval filters
+            // on this so it never compares across incompatible embedding spaces.
+            embeddingProvider: provider,
           },
         };
       })
@@ -192,7 +214,7 @@ export async function retrieveRelevantChunks(
 
   try {
     const index = getIndex();
-    const queryEmbedding = await getEmbedding(query);
+    const { vector: queryEmbedding, provider } = await getEmbedding(query);
     // Over-fetch so the reranker has a real candidate pool to work with.
     const fetchK = Math.min(topK * 3, 15);
 
@@ -200,7 +222,9 @@ export async function retrieveRelevantChunks(
       vector: queryEmbedding,
       topK: fetchK,
       // Serverless + newer APIs: explicit $eq (plain { userId } can fail in some projects)
-      filter: { userId: { $eq: userId } },
+      // embeddingProvider is required too — never compare vectors across
+      // incompatible embedding spaces even if a stale/mismatched one matches userId.
+      filter: { userId: { $eq: userId }, embeddingProvider: { $eq: provider } },
       includeMetadata: true,
     });
 

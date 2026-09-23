@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import { extractTextFromFile } from "@/lib/fileParser";
 import { indexResume } from "@/lib/rag";
 import { matchAllResumes } from "@/lib/resumeMatcher";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import JSZip from "jszip";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024;   // 5MB per file
@@ -54,6 +55,9 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const limited = checkRateLimit(`bru:${session.user.id}`, RATE_LIMITS.bulkResumeUpload);
+  if (limited) return limited;
+
   const formData = await req.formData();
   const jobDescriptionId = formData.get("jobDescriptionId") as string | null;
 
@@ -82,31 +86,44 @@ export async function POST(req: NextRequest) {
   if (entries.length > MAX_FILES) return NextResponse.json({ error: `Max ${MAX_FILES} files at once` }, { status: 400 });
 
   // ── Process each file ────────────────────────────────────────
+  // Batched concurrency instead of one-at-a-time — up to 50 files processed
+  // sequentially could push this single request's latency into timeout
+  // territory. Batch size matches the Prisma connection_limit budget (lib/db.ts).
   const created: { id: string; fileName: string; rawText: string }[] = [];
+  const PROCESS_BATCH = 5;
 
-  for (const entry of entries) {
-    try {
-      const rawText = await extractTextFromFile(entry.buffer, entry.mimeType);
-      if (!rawText || rawText.length < 30) {
-        errors.push({ name: entry.name, error: "Could not extract text" });
-        continue;
-      }
+  for (let i = 0; i < entries.length; i += PROCESS_BATCH) {
+    const batch = entries.slice(i, i + PROCESS_BATCH);
+    const results = await Promise.all(
+      batch.map(async (entry) => {
+        try {
+          const rawText = await extractTextFromFile(entry.buffer, entry.mimeType);
+          if (!rawText || rawText.length < 30) {
+            return { entry, error: "Could not extract text" as const };
+          }
 
-      const resume = await db.resume.create({
-        data: {
-          userId: session.user.id,
-          fileName: entry.name,
-          fileType: entry.mimeType,
-          rawText,
-        },
-      });
+          const resume = await db.resume.create({
+            data: {
+              userId: session.user.id,
+              fileName: entry.name,
+              fileType: entry.mimeType,
+              rawText,
+            },
+          });
 
-      created.push({ id: resume.id, fileName: entry.name, rawText });
+          // RAG index (non-blocking)
+          indexResume(resume.id, session.user.id, rawText).catch(() => {});
 
-      // RAG index (non-blocking)
-      indexResume(resume.id, session.user.id, rawText).catch(() => {});
-    } catch (err) {
-      errors.push({ name: entry.name, error: err instanceof Error ? err.message : "Failed" });
+          return { entry, created: { id: resume.id, fileName: entry.name, rawText } };
+        } catch (err) {
+          return { entry, error: err instanceof Error ? err.message : "Failed" };
+        }
+      })
+    );
+
+    for (const r of results) {
+      if (r.created) created.push(r.created);
+      else errors.push({ name: r.entry.name, error: r.error ?? "Failed" });
     }
   }
 
