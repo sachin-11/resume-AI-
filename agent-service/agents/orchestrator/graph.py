@@ -19,7 +19,8 @@ def route_by_intent(state: OrchestratorState) -> str:
     return state.get("intent", "other")
 
 
-def build_orchestrator_agent():
+def build_orchestrator_agent(checkpointer=None):
+    """Compile the orchestrator. Pass a checkpointer for multi-turn (thread) memory."""
     workflow = StateGraph(OrchestratorState)
 
     workflow.add_node("classify_intent", classify_intent)
@@ -48,7 +49,8 @@ def build_orchestrator_agent():
     workflow.add_edge("other", "finalize")
     workflow.add_edge("finalize", END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer)
 
 
+# Stateless instance (no memory). The API builds a checkpointed one at startup.
 orchestrator_agent = build_orchestrator_agent()

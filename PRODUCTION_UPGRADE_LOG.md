@@ -9,8 +9,8 @@
 |---|---|---|
 | 1 | `core/`: Config + LLM Gateway + Pydantic structured output + tests | ✅ Done (Module 1) |
 | 1 | `core/observability.py`: per-node tracing, request ID, token/cost tracking | ✅ Done (Module 2) |
-| 2 | `memory/`: Postgres checkpointer, multi-turn | ⏳ Next |
-| 2 | `api/`: JWT + org_id (multi-tenant) | ⬜ |
+| 2 | `core/memory.py`: Postgres checkpointer, multi-turn Copilot + chat UI | ✅ Done (Module 3) |
+| 2 | `api/`: JWT + org_id (multi-tenant) | ⏳ Next |
 | 3 | `hitl/`: interrupt() + approvals | ⬜ |
 | 3 | `tools/`: registry, risk levels, MCP pool | ⬜ |
 | 4 | `supervisor/`: loop-style multi-step orchestrator, parallel panel | ⬜ |
@@ -252,3 +252,126 @@ GENERATION: model gpt-4o-mini-2024-07-18, usage 142/29 tokens, cost $0.0000387, 
 - *"Sab mask kar diya to debug kaise karoge?"* Structure, timing aur token count se zyadatar issues pakde jaate hain. Content-level debugging dev environment mein synthetic data aur `LANGFUSE_CAPTURE_CONTENT=true` ke saath hoti hai. Production ka content first-party DB mein rehta hai, third-party mein nahi.
 - *"Callback vs manual logging?"* Callback framework level par lagta hai, to naye nodes ya sub-agents apne aap trace hote hain. Manual logging mein koi na koi node chhoot jaata.
 - *"Sub-graph ki calls kaise count hui?"* Python 3.11+ mein LangChain config contextvars ke through child runnables tak propagate hota hai. Yeh maine ek test se verify kiya.
+
+**Update (Module 3 ke dauraan):** Pinecone wala issue fix ho gaya. `agent-service/.env` mein kisi **doosre Pinecone project** ki API key thi (index ka naam sahi tha). Root `.env` wali key copy karne ke baad FAQ agent chal gaya (`Leave Policy` source, faithfulness 1.00). **Railway par bhi yeh key check karni hai.**
+
+---
+
+# Module 3: Conversation Memory (Multi-turn Recruitment Copilot)
+
+## 1. Problem kya tha
+
+| # | Problem | Asar |
+|---|---|---|
+| 1 | Orchestrator **stateless** tha: har message akela process hota tha | "Is candidate ko screen karo" ke baad "**usko** interview ke liye schedule karo" kaam nahi karta tha. Har baar resume + JD dobara bhejna padta tha |
+| 2 | Checkpointer nahi tha | Crash/redeploy par chalti conversation khatam; HITL pause/resume (Module 5) ke liye bhi base nahi tha |
+| 3 | **Next.js mein orchestrator ka koi UI ya route hi nahi tha** (`/orchestrate`, `/schedule-interview`, `/faq/*` kisi ne call nahi kiye) | Recruitment Copilot sirf backend par tha, user use nahi kar sakta tha |
+
+---
+
+## 2. Backend kya banaya
+
+### `agent-service/core/memory.py`
+| Piece | Kya | Kyun |
+|---|---|---|
+| **AsyncPostgresSaver** (`langgraph-checkpoint-postgres`) + `psycopg_pool` | Har graph step ke baad state Postgres mein save hoti hai | Restart, redeploy aur multiple replicas ke baad bhi conversation bachi rehti hai |
+| **Alag schema `agent_memory`** | Pool connections `search_path=agent_memory` par hain; schema startup par ban jaata hai | Prisma sirf `public` dekhta hai. Tables `public` mein hoti to `prisma migrate dev` unhe "drift" samajh ke **DB reset** karne ko kehta |
+| `_libpq_url()` | `DATABASE_URL` se Prisma-only params (`schema=`, `connection_limit`, `pgbouncer`…) hata deta hai | libpq inhe reject karta hai; same URL dono jagah chal sake |
+| **In-memory fallback** (`MemorySaver`) | Jab `DATABASE_URL` na ho, `AGENT_MEMORY=memory` ho, ya **Windows ProactorEventLoop** ho | psycopg async Windows ke Proactor loop par nahi chalta, aur local MCP client (subprocess) ko wahi loop chahiye. Isliye local Windows dev in-memory, production (Linux) Postgres. Warning log hota hai; `/health` mein `memory` backend dikhta hai |
+| Postgres connect fail → in-memory + **ERROR log** | Availability bani rehti hai, lekin log mein saaf likha jaata hai ki conversations restart par nahi bachengi | — |
+| **`thread_key(user_id, thread_id)`** | Checkpointer thread = `"<user_id>:<thread_id>"`. Dono IDs regex `^[A-Za-z0-9_-]{1,64}$` se validate hote hain | **User isolation**: thread ID guess bhi ho jaaye to doosre user ki conversation nahi khulti. `:` smuggle karke namespace todna mumkin nahi |
+
+### Orchestrator (`agents/orchestrator/`)
+| Change | Kyun |
+|---|---|
+| State mein `messages: Annotated[list[AnyMessage], add_messages]` | Conversation history; har turn user message + assistant reply jodta hai |
+| `build_orchestrator_agent(checkpointer=None)` | API startup par checkpointer ke saath compile; stateless instance bhi bacha hai |
+| `classify_intent` ko **pichle 6 messages** dikhte hain | "her", "that role", "same time" jaise references resolve hote hain |
+| Router prompt: `other` = **"is conversation ke baare mein sawaal"** (recap), `faq` = sirf company policy docs | Live test mein "which skills was she missing?" `faq` par ja raha tha (galat). Fix ke baad `other` history se sahi jawab deta hai |
+| `run_other` ab pichle 10 messages ke saath chat karta hai | Recap aur follow-up sawaalon ka jawab history se |
+| `finalize` → `_reply_text()` se ek **AIMessage** history mein | Screening: decision + rating + matched/missing skills; scheduling: confirmation; FAQ: answer |
+| Sub-agents (`candidate_screening`, `scheduler`, `faq`) `compile(checkpointer=False)` | Parent checkpointer ke andar unke internal steps save na hon. Warna resume text dobara DB mein jaata (duplicate PII) aur storage waste hota |
+
+### `main.py` / API
+| Endpoint | Detail |
+|---|---|
+| `POST /orchestrate` | Naye optional `user_id`, `thread_id`. `user_id` ho to turn thread mein persist hota hai (naya `thread_id` mint hota hai, response mein wapas). **Bina `user_id` purana stateless behaviour** (backward compatible) |
+| | **Per-turn fields reset** (intent, results, review flags), taaki pichle turn ka data leak na ho |
+| | **Context fields** (resume, JD, candidate, slots) sirf tab overwrite hote hain jab bheje jaayein, warna thread mein yaad rehte hain |
+| | `logs` thread mein append-only hai, response mein **sirf is turn ke** logs (`logs_before` se slice) |
+| | Response mein `reply`, `thread_id`, `memory` |
+| `GET /threads/{id}?user_id=` | History + context flags (`has_resume`, `has_job_description`, `candidate_name`). Content nahi, sirf flags |
+| `DELETE /threads/{id}?user_id=` | Thread ke saare checkpoints permanently delete (`adelete_thread`) |
+| `lifespan` | Startup par checkpointer + copilot graph, shutdown par pool close |
+| `run_agent(..., thread=)` | `configurable.thread_id` + Langfuse **`session_id`**, taaki ek conversation ke saare turns Langfuse mein ek session mein dikhein |
+
+---
+
+## 3. Frontend kya banaya
+
+| File | Kya |
+|---|---|
+| `lib/permissions.ts` | Naya `useRecruiterCopilot: ["admin", "recruiter"]` |
+| `lib/copilot-agent.ts` | `copilotUser()` (session + role check), `THREAD_ID_RE` (agent-service jaisa hi regex), agent URL/secret |
+| `app/api/recruiter-copilot/route.ts` | `POST`: zod validation, resume **ownership check** (`userId` se), user ke campaigns ke **future unbooked `InterviewSlot`** har turn fresh, `user_id = session.user.id` (client kabhi user_id nahi bhejta), `logAgentUsage` |
+| `app/api/recruiter-copilot/[threadId]/route.ts` | `GET` history, `DELETE` conversation (Next 16 pattern: `params` ek Promise hai) |
+| `app/(dashboard)/recruiter-copilot/page.tsx` | Chat UI: **Context panel** (resume, candidate, JD), jo sirf *badle hue* fields agle message ke saath bhejta hai; "remembered: resume · job description · Asha" indicator; har reply par **intent badge**, **human-review warning** + reasons, FAQ **sources**, proposed **slots**; New/Delete conversation; reload par history restore (thread ID `localStorage` mein, try/catch ke saath) |
+| `components/layout/sidebar.tsx` | Recruiter + Admin nav mein "Recruitment Copilot" |
+| `proxy.ts` | `/recruiter-copilot` protected (login zaroori); `/api/recruiter-copilot` par rate limit **20/min** (har turn mein kai LLM calls) |
+
+Naam `recruiter-copilot` rakha, kyunki `/interview/copilot` ("AI Copilot") pehle se ek alag feature hai.
+
+---
+
+## 4. Verification
+
+**Unit tests**: `tests/test_memory.py`, 7 naye tests (total **28 passed**):
+- `thread_key` unsafe IDs (`a:b`, empty, 65 chars) reject karta hai
+- `_libpq_url` Prisma params hata deta hai, `sslmode` rakhta hai
+- **Multi-turn**: turn 2 ke router prompt mein turn 1 ka message tha; history 4 messages; turn 1 ka `candidate_name` turn 2 mein yaad; logs per-turn
+- **Isolation**: `alice` ka thread `mallory` ke liye `exists: false`
+- Delete ke baad thread gayab; `../../etc` thread ID → 400; bina `user_id` stateless
+
+**Postgres (asli local DB, Postgres 18)**:
+```
+backend: postgres
+after restart → messages: ['human','ai','human','ai'] | candidate_name: Priya   ← naya pool, data bacha ✅
+tables: agent_memory.checkpoint_blobs / checkpoint_migrations / checkpoint_writes / checkpoints  ← public mein nahi ✅
+checkpoints left after delete: 0 ✅
+```
+`prisma db pull` mein koi checkpoint table nahi dikhi, `prisma migrate status`: "Database schema is up to date!"
+
+**Live multi-turn (asli LLM, synthetic candidate "Asha Verma")**:
+```
+TURN 1 "screen this candidate"            → resume_screening: SHORTLIST 85/100, Missing: Django, Kubernetes
+TURN 2 "propose slots for her next week"  → scheduling, "Hi Asha, ..."   ← "her" history se resolve ✅
+TURN 3 "which skills was she missing?"    → other: "Asha was missing experience with Django and Kubernetes." ✅
+```
+(Router fix se pehle turn 3 galti se `faq` par ja raha tha.)
+
+**Frontend**: `npx tsc --noEmit` clean; naye files ESLint clean (`sidebar.tsx` ke 2 issues pehle se the). **UI browser mein abhi test nahi hua**, kyunki recruiter login chahiye.
+
+---
+
+## 5. Trade-offs aur jo baaki hai
+
+| Point | Detail |
+|---|---|
+| Windows local dev = in-memory memory | Server restart par conversations jaati hain. Production Linux par Postgres |
+| Thread retention / TTL nahi | Conversations tab tak rehti hain jab tak delete na ho. Next step: purane threads ka cleanup job (jaise 30 din) |
+| Same thread par concurrent requests | UI send button disable karta hai, lekin API level par lock nahi hai |
+| `logs` thread mein badhte rehte hain | Response mein slice hota hai, lekin checkpoint mein poori list rehti hai. Lambi conversations ke liye cap karna hai |
+| Threads ki list nahi | UI ek hi current thread `localStorage` mein rakhta hai. Purani conversations ki list ke liye threads table chahiye |
+| Scheduler "next week" nahi samajhta | Slots kal se generate hote hain (purana behaviour, `requested_timeframe` use nahi hota) |
+| Long-term / episodic memory | Abhi sirf thread (short-term) memory hai. Recruiter preferences aur candidate history ke liye LangGraph `Store` agla step |
+
+---
+
+## 6. Interview mein kaise bolna hai
+
+> "Recruitment Copilot ab multi-turn hai. Orchestrator LangGraph **Postgres checkpointer** ke saath compile hota hai, to har step ke baad state save hoti hai: conversation restart ke baad bhi rehti hai, aur yahi aage human-in-the-loop pause/resume ka base banega. State mein `add_messages` reducer se history hai. Router ko pichle turns dikhte hain, isliye 'usko schedule karo' jaisa reference resolve hota hai, aur resume/JD ek baar dene ke baad thread mein yaad rehte hain. Per-turn fields har turn reset hote hain, taaki pichle turn ka data leak na ho. Security ke liye thread key user ID + thread ID hai, dono regex-validated, to doosre user ka thread kabhi nahi khulta. Tables alag Postgres schema mein hain, taaki Prisma migrations unhe drift na samjhein. Sub-agents `checkpointer=False` hain, taaki resume text duplicate store na ho. Live testing mein ek routing bug bhi mila: recap sawaal FAQ par ja raha tha. Prompt mein intent boundary clear karke fix kiya."
+
+**Follow-up sawaal:**
+- *"Checkpointer vs apni messages table?"* Checkpointer poori graph state save karta hai (sirf messages nahi), aur `interrupt()` / resume / time-travel ke liye zaroori hai. Apni table sirf chat history deti.
+- *"Short-term vs long-term memory?"* Checkpointer = ek thread ki memory. Long-term (cross-thread, jaise recruiter preferences) ke liye LangGraph `Store` ya vector DB, namespace per user/org.
+- *"Memory mein PII ka kya?"* First-party Postgres mein hai, Langfuse mein masked. Delete endpoint hai; retention/TTL agla kaam hai.

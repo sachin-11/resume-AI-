@@ -9,6 +9,7 @@ Endpoints:
 
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 import secrets
 from typing import Optional
@@ -16,9 +17,11 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
 
 load_dotenv()
 
+from core import memory
 from core.observability import RequestIdLogFilter, flush as flush_traces, new_request_id, request_id_var, run_agent
 
 _log_handler = logging.StreamHandler()
@@ -33,8 +36,13 @@ from agent import resume_agent, ResumeImprovementState
 
 @asynccontextmanager
 async def lifespan(_app):
+    from agents.orchestrator.graph import build_orchestrator_agent
+
+    # Multi-turn Recruitment Copilot: orchestrator compiled with conversation memory.
+    _app.state.copilot = build_orchestrator_agent(checkpointer=await memory.open_checkpointer())
     yield
     flush_traces()  # don't drop buffered Langfuse spans on shutdown / redeploy
+    await memory.close_checkpointer()
 
 
 app = FastAPI(
@@ -114,6 +122,7 @@ def health():
         "status": "ok",
         "agent": "resume-improvement",
         "llm": "openai" if os.getenv("OPENAI_API_KEY") else "groq",
+        "memory": memory.backend,
     }
 
 
@@ -629,12 +638,27 @@ async def run_auto_apply(
 # ── Orchestrator: Recruitment Copilot Router ──────────────────────
 class OrchestrateRequest(BaseModel):
     user_message: str
+    # Multi-turn memory: send user_id (and thread_id to continue a conversation).
+    # Without user_id the turn runs statelessly, as before.
+    user_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    # Context fields persist in the thread once given; omit them on later turns.
     resume_text: Optional[str] = None
     job_description: Optional[str] = None
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     github_username: Optional[str] = None
-    existing_slots: list = []   # InterviewSlot rows {id, startsAt, durationMin, isBooked}, for scheduling intent
+    existing_slots: Optional[list] = None   # InterviewSlot rows {id, startsAt, durationMin, isBooked}, for scheduling intent
+
+
+_CONTEXT_FIELDS = ("resume_text", "job_description", "candidate_name", "candidate_email", "github_username", "existing_slots")
+
+
+def _thread_or_400(user_id: Optional[str], thread_id: Optional[str]) -> str:
+    try:
+        return memory.thread_key(user_id or "", thread_id or "")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user_id or thread_id")
 
 
 @app.post("/orchestrate")
@@ -647,20 +671,19 @@ async def orchestrate(
     it to the right sub-agent (resume screener, scheduler, or FAQ answerer).
 
     Nodes: classify_intent →(route)→ resume_screening | scheduling | faq | other → finalize
+
+    With `user_id`, the turn is part of a persisted conversation thread (a new
+    `thread_id` is minted if none is given and returned in the response).
     """
     verify_secret(x_agent_secret)
 
     if not request.user_message or len(request.user_message.strip()) < 3:
         raise HTTPException(status_code=400, detail="user_message required")
 
-    initial_state = {
+    turn_state = {
+        "messages": [HumanMessage(content=request.user_message)],
         "user_message": request.user_message,
-        "resume_text": request.resume_text,
-        "job_description": request.job_description,
-        "candidate_name": request.candidate_name,
-        "candidate_email": request.candidate_email,
-        "github_username": request.github_username,
-        "existing_slots": request.existing_slots,
+        # Per-turn fields are reset so nothing from the previous turn leaks into this one.
         "intent": "",
         "intent_reasoning": "",
         "resume_screener_result": {},
@@ -670,17 +693,76 @@ async def orchestrate(
         "needs_human_review": False,
         "review_reasons": [],
         "final_response": {},
-        "logs": [],
     }
+    # Context: only overwrite what this turn actually provides, so it carries across turns.
+    for field in _CONTEXT_FIELDS:
+        value = getattr(request, field)
+        if value is not None:
+            turn_state[field] = value
 
-    final_state, usage = await run_agent("orchestrate", orchestrator_agent, initial_state)
+    if not request.user_id:
+        stateless = {**{f: None for f in _CONTEXT_FIELDS}, "existing_slots": [], "logs": [], **turn_state}
+        final_state, usage = await run_agent("orchestrate", orchestrator_agent, stateless)
+        return {
+            "success": True,
+            "usage": usage,
+            **final_state.get("final_response", {}),
+            "logs": final_state.get("logs", []),
+        }
+
+    thread_id = request.thread_id or uuid.uuid4().hex
+    thread = _thread_or_400(request.user_id, thread_id)
+    copilot = app.state.copilot
+
+    # `logs` is append-only across the thread; return only this turn's lines.
+    previous = await copilot.aget_state({"configurable": {"thread_id": thread}})
+    logs_before = len(previous.values.get("logs", [])) if previous.values else 0
+    if not previous.values:
+        turn_state.setdefault("existing_slots", [])
+
+    final_state, usage = await run_agent(
+        "orchestrate", copilot, turn_state, user_id=request.user_id, thread=thread,
+    )
 
     return {
         "success": True,
+        "thread_id": thread_id,
+        "memory": memory.backend,
         "usage": usage,
         **final_state.get("final_response", {}),
-        "logs": final_state.get("logs", []),
+        "reply": final_state["messages"][-1].content if final_state.get("messages") else "",
+        "logs": final_state.get("logs", [])[logs_before:],
     }
+
+
+@app.get("/threads/{thread_id}")
+async def get_thread(thread_id: str, user_id: str, x_agent_secret: Optional[str] = Header(None)):
+    """Conversation history of one of this user's Copilot threads."""
+    verify_secret(x_agent_secret)
+    snapshot = await app.state.copilot.aget_state({"configurable": {"thread_id": _thread_or_400(user_id, thread_id)}})
+    values = snapshot.values or {}
+    return {
+        "thread_id": thread_id,
+        "exists": bool(values),
+        "messages": [
+            {"role": "user" if m.type == "human" else "assistant", "content": m.content}
+            for m in values.get("messages", [])
+        ],
+        # What context the thread remembers (flags only, not the content).
+        "context": {
+            "has_resume": bool(values.get("resume_text")),
+            "has_job_description": bool(values.get("job_description")),
+            "candidate_name": values.get("candidate_name"),
+        },
+    }
+
+
+@app.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str, user_id: str, x_agent_secret: Optional[str] = Header(None)):
+    """Permanently delete a Copilot thread and all its checkpoints."""
+    verify_secret(x_agent_secret)
+    await app.state.copilot.checkpointer.adelete_thread(_thread_or_400(user_id, thread_id))
+    return {"success": True}
 
 
 # ── Scheduler: Interview slot proposal ─────────────────────────────

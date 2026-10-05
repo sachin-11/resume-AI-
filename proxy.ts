@@ -64,11 +64,13 @@ const PROTECTED_PREFIXES = [
   "/upload-resume", "/resume-report", "/settings", "/billing",
   "/team", "/admin", "/chat", "/question-bank",
   "/interview/setup", "/interview/session", "/interview/copilot",
+  "/recruiter-copilot",
 ];
 
 // ── API rate limits ──────────────────────────────────────────────
 const API_RATE_LIMITS: Record<string, { limit: number; windowMs: number }> = {
   "/api/chat":                    { limit: 20,  windowMs: 60_000 },       // 20/min
+  "/api/recruiter-copilot":       { limit: 20,  windowMs: 60_000 },       // 20/min (several LLM calls per turn)
   "/api/interview/copilot":      { limit: 15,  windowMs: 60_000 },        // 15/min (includes transcribe)
   "/api/interview/create":        { limit: 10,  windowMs: 60_000 },       // 10/min
   "/api/feedback/generate":       { limit: 10,  windowMs: 60_000 },       // 10/min

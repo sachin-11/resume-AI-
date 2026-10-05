@@ -27,7 +27,9 @@ def build_candidate_screening_agent():
     workflow.add_edge("match_jd",      "build_report")
     workflow.add_edge("build_report",  END)
 
-    return workflow.compile()
+    # checkpointer=False: when run as a sub-agent of the checkpointed orchestrator,
+    # don't persist this graph's internal steps (duplicate PII, wasted storage).
+    return workflow.compile(checkpointer=False)
 
 
 candidate_screening_agent = build_candidate_screening_agent()

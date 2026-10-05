@@ -20,7 +20,9 @@ def build_faq_agent():
     workflow.add_edge("answer_question", "eval_answer")
     workflow.add_edge("eval_answer", END)
 
-    return workflow.compile()
+    # checkpointer=False: when run as a sub-agent of the checkpointed orchestrator,
+    # don't persist this graph's internal steps (duplicate PII, wasted storage).
+    return workflow.compile(checkpointer=False)
 
 
 faq_agent = build_faq_agent()

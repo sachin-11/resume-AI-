@@ -133,8 +133,14 @@ class UsageCollector(BaseCallbackHandler):
 
 # ── Running an agent with tracing ────────────────────────────────
 
-def run_config(agent: str, usage: UsageCollector, user_id: Optional[str] = None) -> dict:
-    """LangGraph config: Langfuse trace named after the agent, tagged with the request id."""
+def run_config(
+    agent: str, usage: UsageCollector, user_id: Optional[str] = None, thread: Optional[str] = None,
+) -> dict:
+    """LangGraph config: Langfuse trace named after the agent, tagged with the request id.
+
+    `thread` (a memory.thread_key) selects the checkpointer thread and groups the
+    conversation's turns as one Langfuse session.
+    """
     request_id = request_id_var.get()
     callbacks: list = [usage]
     handler = _langfuse_handler()
@@ -148,13 +154,19 @@ def run_config(agent: str, usage: UsageCollector, user_id: Optional[str] = None)
     }
     if user_id:
         metadata["langfuse_user_id"] = user_id
-    return {"callbacks": callbacks, "metadata": metadata, "run_name": agent}
+    config = {"callbacks": callbacks, "metadata": metadata, "run_name": agent}
+    if thread:
+        metadata["langfuse_session_id"] = thread
+        config["configurable"] = {"thread_id": thread}
+    return config
 
 
-async def run_agent(agent: str, graph, state: dict, user_id: Optional[str] = None) -> tuple[dict, dict]:
+async def run_agent(
+    agent: str, graph, state: dict, user_id: Optional[str] = None, thread: Optional[str] = None,
+) -> tuple[dict, dict]:
     """Invoke a compiled graph with tracing; returns (final_state, usage_summary)."""
     usage = UsageCollector()
-    final_state = await graph.ainvoke(state, config=run_config(agent, usage, user_id))
+    final_state = await graph.ainvoke(state, config=run_config(agent, usage, user_id, thread))
     summary = usage.summary()
     logger.info(
         "agent_run agent=%s calls=%s input_tokens=%s output_tokens=%s",

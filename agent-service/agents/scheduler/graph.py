@@ -18,7 +18,9 @@ def build_scheduler_agent():
     workflow.add_edge("propose_slots", "draft_confirmation")
     workflow.add_edge("draft_confirmation", END)
 
-    return workflow.compile()
+    # checkpointer=False: when run as a sub-agent of the checkpointed orchestrator,
+    # don't persist this graph's internal steps (duplicate PII, wasted storage).
+    return workflow.compile(checkpointer=False)
 
 
 scheduler_agent = build_scheduler_agent()

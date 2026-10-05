@@ -3,6 +3,7 @@ Recruitment Copilot Orchestrator — Nodes
 """
 from typing import Literal
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from agents.shared.llm import get_llm
@@ -18,9 +19,28 @@ class IntentOutput(BaseModel):
     reasoning: str = ""
 
 
+def _prior_messages(state: dict, limit: int) -> list:
+    """Earlier turns of this thread (the current user message is the last entry)."""
+    messages = state.get("messages") or []
+    if messages and getattr(messages[-1], "type", "") == "human":
+        messages = messages[:-1]
+    return messages[-limit:]
+
+
+def _format_history(messages: list) -> str:
+    return "\n".join(
+        f"{'User' if m.type == 'human' else 'Copilot'}: {str(m.content)[:400]}" for m in messages
+    )
+
+
 async def classify_intent(state: dict) -> dict:
     """Node 1: Classify the user's message into a routable intent."""
     message = state.get("user_message", "")
+    history = _format_history(_prior_messages(state, limit=6))
+    history_block = (
+        f"\nConversation so far (use it to resolve references like 'her', 'that role', 'same time'):\n{history[:2500]}\n"
+        if history else ""
+    )
 
     prompt = f"""Classify this recruiter/candidate message into exactly one intent. Return ONLY valid JSON:
 {{
@@ -31,9 +51,11 @@ async def classify_intent(state: dict) -> dict:
 intent must be one of:
 - "resume_screening": asking to screen/evaluate/match a candidate's resume against a job
 - "scheduling": asking to book, propose, reschedule, or check an interview/calendar slot
-- "faq": asking a question about company policy, process, or how something works
-- "other": anything else (greetings, unrelated chit-chat, unclear requests)
+- "faq": asking about company policy or HR process (leave, benefits, hiring policy) — answered from company documents
+- "other": anything else — greetings, chit-chat, unclear requests, and questions about this conversation itself
+  (recapping or clarifying earlier results, e.g. "what was her score?", "which skills was she missing?")
 
+{history_block}
 Message:
 {message[:1500]}"""
 
@@ -159,15 +181,37 @@ async def run_other(state: dict) -> dict:
     llm = get_llm()
     message = state.get("user_message", "")
 
-    response = await llm.ainvoke(
-        f"You are a recruitment copilot assistant. Reply briefly and helpfully to this message:\n{message[:1000]}"
-    )
+    response = await llm.ainvoke([
+        SystemMessage(content="You are a recruitment copilot assistant. Reply briefly and helpfully."),
+        *_prior_messages(state, limit=10),
+        HumanMessage(content=message[:1000]),
+    ])
     text = response.content if hasattr(response, "content") else str(response)
 
     return {
         "other_result": {"status": "ok", "message": text},
         "logs": ["💬 Handled via general fallback (no specific sub-agent matched)"],
     }
+
+
+def _reply_text(intent: str, result: dict) -> str:
+    """The assistant turn stored in conversation history (and shown in the chat)."""
+    if result.get("status") == "missing_input":
+        return result.get("message", "Some required input is missing.")
+    if intent == "resume_screening":
+        r = result.get("report", {})
+        name = r.get("candidateName") or "the candidate"
+        lines = [f"Screening for {name}: {str(r.get('screeningDecision', 'maybe')).upper()} — rating {r.get('overallRating', '?')}/100."]
+        if r.get("matchedSkills"):
+            lines.append(f"Matched: {', '.join(r['matchedSkills'][:8])}")
+        if r.get("missingSkills"):
+            lines.append(f"Missing: {', '.join(r['missingSkills'][:8])}")
+        return "\n".join(lines)
+    if intent == "scheduling":
+        return result.get("confirmation_message") or "I couldn't find any interview slots to propose."
+    if intent == "faq":
+        return result.get("answer", "")
+    return result.get("message", "")
 
 
 def finalize(state: dict) -> dict:
@@ -229,5 +273,6 @@ def finalize(state: dict) -> dict:
             "needs_human_review": needs_review,
             "review_reasons": reasons,
         },
+        "messages": [AIMessage(content=_reply_text(intent, result))],
         "logs": ["🏁 Orchestrator finalized response" + (" — 🛡️ flagged for human review" if needs_review else "")],
     }

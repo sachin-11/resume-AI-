@@ -10,6 +10,7 @@ export const PERMISSIONS = {
   viewAudio:        ["admin", "recruiter"],
   manageTeam:       ["admin"],
   viewTeam:         ["admin", "recruiter", "viewer"],
+  useRecruiterCopilot: ["admin", "recruiter"],
 
   // ── Candidate features ───────────────────────────────────────
   createInterview:  ["admin", "recruiter", "candidate"],

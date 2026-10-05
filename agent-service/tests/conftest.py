@@ -6,6 +6,8 @@ from pathlib import Path
 # .env because load_dotenv() doesn't override variables that are already set.
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
+# Unit tests use in-memory conversation memory; the Postgres path is verified separately.
+os.environ["AGENT_MEMORY"] = "memory"
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
