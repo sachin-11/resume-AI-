@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { searchJobs, formatSalary } from "@/lib/jsearch";
 import { analyzeGap } from "@/lib/jobAgent";
+import { logAgentUsage } from "@/lib/agentUsage";
 
 // Basic keyword score when no resume is available
 function basicTitleScore(jobTitle: string, targetRole: string): number {
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
     }
 
     const agentData = await agentRes.json();
+    logAgentUsage(agentData.usage, { userId: session.user.id, feature: "agent:auto-apply" });
     const agentJobs = agentData.found_jobs ?? [];
 
     if (agentJobs.length === 0) {

@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { logAgentUsage } from "@/lib/agentUsage";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
       signal: AbortSignal.timeout(180_000), // 3 min — 3 agents run sequentially
     });
     const data = await res.json();
+    logAgentUsage(data.usage, { userId: session.user.id, feature: "agent:panel-interview" });
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Agent failed" }, { status: 500 });

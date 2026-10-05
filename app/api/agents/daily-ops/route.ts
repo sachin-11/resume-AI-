@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { logAgentUsage } from "@/lib/agentUsage";
 
 const VALID_TASKS = new Set([
   "morning_summary",
@@ -66,6 +67,7 @@ export async function POST(req: NextRequest) {
         { status: res.status }
       );
     }
+    logAgentUsage(data.usage, { userId: session.user.id, feature: "agent:daily-ops" });
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json(

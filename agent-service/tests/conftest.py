@@ -1,5 +1,11 @@
+import os
 import sys
 from pathlib import Path
+
+# Tests must never ship traces to the real Langfuse project. Empty values win over
+# .env because load_dotenv() doesn't override variables that are already set.
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel

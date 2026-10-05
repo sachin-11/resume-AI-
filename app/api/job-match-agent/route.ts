@@ -12,6 +12,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { z } from "zod";
+import { logAgentUsage, type AgentUsage } from "@/lib/agentUsage";
 
 const schema = z.object({
   resumeId:       z.string().min(1),
@@ -77,7 +78,8 @@ export async function POST(req: NextRequest) {
       throw new Error((err as { detail?: string }).detail ?? `Agent returned ${agentRes.status}`);
     }
 
-    const agentData = await agentRes.json() as { report: Record<string, unknown>; logs: string[] };
+    const agentData = await agentRes.json() as { report: Record<string, unknown>; logs: string[]; usage?: AgentUsage };
+    logAgentUsage(agentData.usage, { userId: session.user.id, feature: "agent:job-match" });
     const report    = agentData.report;
 
     // Persist as a JobApplication so the user can revisit later

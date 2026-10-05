@@ -8,8 +8,8 @@
 | Phase | Module | Status |
 |---|---|---|
 | 1 | `core/`: Config + LLM Gateway + Pydantic structured output + tests | ✅ Done (Module 1) |
-| 1 | `observability/`: per-node tracing, run_id, cost | ⏳ Next |
-| 2 | `memory/`: Postgres checkpointer, multi-turn | ⬜ |
+| 1 | `core/observability.py`: per-node tracing, request ID, token/cost tracking | ✅ Done (Module 2) |
+| 2 | `memory/`: Postgres checkpointer, multi-turn | ⏳ Next |
 | 2 | `api/`: JWT + org_id (multi-tenant) | ⬜ |
 | 3 | `hitl/`: interrupt() + approvals | ⬜ |
 | 3 | `tools/`: registry, risk levels, MCP pool | ⬜ |
@@ -148,3 +148,107 @@ venv/Scripts/python.exe -m pytest tests        # 16 passed
 - *"`with_structured_output` kyun nahi use kiya?"* Groq aur OpenAI dono par same behaviour chahiye tha, existing prompts already JSON maangte the, aur error dikha ke re-ask (repair loop) ka control mujhe khud chahiye tha. Native structured output ek valid next step hai.
 - *"Network error par fallback kyun nahi diya?"* Outage ko fake result ke peeche chhupana galat hai. Data galat ho to fallback + flag, infrastructure fail ho to error.
 - *"Fail-open vs fail-closed?"* Safety checks (guardrail, eval) hamesha fail-closed honi chahiye. Agar check chal hi nahi paaya, to answer ko unsafe maano.
+
+---
+
+# Module 2: Observability (Tracing + Request ID + Cost)
+
+## 1. Problem kya tha
+
+| # | Problem | Asar |
+|---|---|---|
+| 1 | Langfuse mein sirf **guardrail events** jaate the (orchestrator finalize, FAQ eval). Kaunsa node chala, kitna time laga, kaunsi LLM call slow thi, yeh kuch nahi dikhta tha | Production mein "agent slow hai / galat answer de raha hai" ko sirf andaaze se debug kar sakte the |
+| 2 | Logs mein **request ID nahi** tha | Concurrent traffic mein ek run ke logs alag karna mumkin nahi tha |
+| 3 | Agent-service ka **token/cost track nahi** hota tha. `AiUsageLog` mein sirf Next.js ki direct Groq/OpenAI calls aati thi | Admin cost dashboard mein LangGraph agents ka kharcha gayab tha |
+| 4 | Har guardrail event par `lf.flush()` hota tha (request ke andar synchronous network call) | Har request ka latency badhta tha |
+| 5 | `pricing.ts` exact model naam match karta tha, lekin provider `gpt-4o-mini-2024-07-18` return karta hai | Aisi calls ki cost `$0` record hoti |
+
+**Sabse badi constraint:** commit `5856a40` mein Langfuse ko candidate PII (resume, answers) bhejna band kiya gaya tha. Per-node tracing mein har prompt Langfuse jaata hai, isliye tracing aisi chahiye thi jo privacy na tode.
+
+---
+
+## 2. Kya banaya
+
+### `agent-service/core/observability.py`
+
+| Piece | Kya karta hai | Kyun |
+|---|---|---|
+| **Langfuse client with `mask`** | Client banate waqt `mask=_mask` diya. SDK har span ke input/output/metadata par yeh chalata hai: har string `[redacted — N chars]` ban jaati hai; numbers, bools aur structure same rehte hain. Unknown objects `[redacted ClassName]` ban jaate hain (**fail-closed**) | Privacy ek hi jagah se lagti hai, kisi node ko redact karna yaad nahi rakhna padta. Mask function khud crash ho jaaye to bhi SDK poora data "fully masked" kar deta hai |
+| `LANGFUSE_CAPTURE_CONTENT=true` | Masking band (sirf dev / synthetic data ke liye) | Kabhi debugging mein content dekhna ho |
+| `environment`, `release`, `sample_rate` | `APP_ENV`, `RAILWAY_GIT_COMMIT_SHA`, `LANGFUSE_SAMPLE_RATE` se | Prod aur dev traces alag rahein; pata chale kaunse deploy mein regression aaya; high traffic par sampling |
+| **`UsageCollector`** (LangChain callback) | `on_llm_end` par har call ke tokens model-wise jodta hai | Ek run (sub-agents samet) ke total tokens aur calls. Callback level par hai, to purane `get_llm()` wale nodes bhi count hote hain |
+| **`run_config(agent, usage, user_id)`** | LangGraph config banata hai: callbacks (usage + Langfuse handler), `langfuse_trace_name`, tags `agent:<name>` + `request:<id>`, `langfuse_user_id` | Har run Langfuse mein agent ke naam se ek trace banta hai, jo request ID se search ho sakta hai |
+| **`run_agent(agent, graph, state, user_id)`** | `graph.ainvoke(state, config=...)` chala ke `(final_state, usage_summary)` return karta hai, aur ek `agent_run` log line likhta hai | Saare endpoints ek hi tarike se trace hote hain |
+| **Request ID** | `request_id_var` (ContextVar); `new_request_id()` caller ka `x-request-id` tabhi maanta hai jab woh ≤64 chars aur alphanumeric/dash ho, warna naya uuid banata hai; `RequestIdLogFilter` | Har log line mein `[req=...]`. Galat ya injected header (newline wagairah) logs tak nahi pahunchta |
+| `trace_guardrail` | Ab har baar `flush()` nahi karta, aur alag `_redact` ki zaroorat nahi (client khud mask karta hai) | Request path se network call hat gaya |
+| `flush()` | FastAPI `lifespan` shutdown par chalta hai | Redeploy par buffered spans drop na hon |
+
+`agents/shared/observability.py` ab sirf re-export hai, taaki purane imports chalte rahein.
+
+### `agent-service/main.py`
+- **Request-ID middleware**: har response mein `x-request-id` header
+- Log format: `%(asctime)s %(levelname)s %(name)s [req=%(request_id)s] %(message)s`
+- `lifespan` handler (deprecated `@app.on_event` ki jagah), jo shutdown par flush karta hai
+- **Saare 12 agent endpoints** ab `run_agent(...)` se chalte hain, aur response mein **`usage`** field hai:
+  ```json
+  "usage": {"calls": 2, "input_tokens": 184, "output_tokens": 60,
+            "by_model": {"gpt-4o-mini-2024-07-18": {"calls": 2, "input_tokens": 184, "output_tokens": 60}}}
+  ```
+  `improve-resume` aur `job-match` mein `user_id` bhi Langfuse ko jaata hai. Yeh internal cuid hai, aur Next.js bhi ise pehle se bhejta hai.
+
+### `agent-service/requirements.txt`
+- **`langchain==0.3.30` add kiya.** Langfuse ka LangChain `CallbackHandler` iske bina load nahi hota. Yeh live test mein pakda gaya (`Please install langchain...`). `0.3.x` liya taaki existing `langchain-core 0.3.86` ke saath compatible rahe; `pip check` clean hai.
+
+### Next.js side
+| File | Change | Kyun |
+|---|---|---|
+| `lib/agentUsage.ts` (naya) | `logAgentUsage(usage, {userId, feature})`: har model ke liye ek `AiUsageLog` row (`feature: "agent:<name>"`), cost `calcCostUsd` se. Fire-and-forget | Admin cost dashboard mein agent runs bhi aayein, user ke hisaab se |
+| 8 agent routes (`agents/*`, `job-match-agent`, `resume/improve`, `auto-apply/fetch-jobs`) | Agent ka response aane ke baad `logAgentUsage(...)` | Same |
+| `lib/pricing.ts` | `pricingFor()`: exact match na mile to **longest prefix** match | `gpt-4o-mini-2024-07-18` ko `gpt-4o-mini` ki pricing milti hai. Pehle `$0` aata tha |
+
+---
+
+## 3. Verification
+
+**Unit tests**: `tests/test_observability.py` mein 5 naye tests (total **21 passed**):
+- `redact` structure rakhta hai aur content hata deta hai; unknown object par fail-closed
+- Langfuse configure na ho to sirf usage callback lagta hai (koi network call nahi)
+- `run_agent` 3 nodes aur ek **sub-graph (jise config pass nahi kiya)** ki usage sahi jodta hai. Isse confirm hua ki config contextvars se sub-graphs tak propagate hota hai
+- Request ID: naya mint hota hai, valid caller ID aage jaata hai, aur `"bad id\nINJECT"` jaisa header reject hota hai
+- `conftest.py` Langfuse keys khaali kar deta hai, taaki tests kabhi asli project mein traces na bhejein
+
+**Live end-to-end** (synthetic message, asli Langfuse project):
+```
+trace "orchestrate" (tags: agent:orchestrate, request:smoketest-obs-004) → 9 observations
+  orchestrate → classify_intent → RunnableWithFallbacks → ChatOpenAI (GENERATION)
+             → route_by_intent → other → RunnableWithFallbacks → ChatOpenAI → finalize
+input: {"user_message": "[redacted — 33 chars]", ...}     ← PII masked ✅
+GENERATION: model gpt-4o-mini-2024-07-18, usage 142/29 tokens, cost $0.0000387, temperature 0 ✅
+```
+- `npx tsc --noEmit` mein koi error nahi. ESLint mein sirf 4 purane warnings hain (`auto-apply/fetch-jobs` ke unused imports, is change se nahi)
+
+**Live test mein ek alag issue mila (is module se related nahi):** Local par Pinecone index `resume-coach` **exist nahi karta** (404 `NOT_FOUND`), isliye FAQ branch crash ho jaati hai. `.env` ka `PINECONE_INDEX` check karna hai, ya index banana hai.
+
+---
+
+## 4. Trade-offs aur jo baaki hai
+
+| Point | Detail |
+|---|---|
+| Masked traces mein prompt ka content nahi dikhta | Structure, timing, model, tokens, cost aur errors dikhte hain. Content dekhna ho to synthetic data ke saath `LANGFUSE_CAPTURE_CONTENT=true` |
+| Metadata bhi masked hai | `langgraph_node` jaisa string metadata bhi redact hota hai. Node ka naam span name mein dikhta hai, isliye tree readable rehta hai |
+| `trace_guardrail` ka score | Guardrail event abhi shayad alag trace mein jaata hai; run ke trace mein nest hota hai ya nahi, yeh verify nahi kiya. Next step: score ko run ke trace ID se attach karna |
+| Next.js `x-request-id` nahi bhejta | Abhi ID agent-service banata hai. Next.js ID bheje aur apne logs mein bhi print kare, tab end-to-end correlation poori hogi |
+| Metrics / alerts | Prometheus/OTel metrics aur alerting (error rate, cost per day) abhi nahi hain. Tab tak Langfuse dashboards se kaam chal sakta hai |
+| `/faq/ingest` | Yeh graph run nahi hai, isliye `run_agent` se trace nahi hota |
+
+---
+
+## 5. Interview mein kaise bolna hai
+
+> "Har agent run ek Langfuse trace hai. Usme har LangGraph node, har LLM call, model, tokens, latency aur cost ek tree mein dikhte hain, to 'kaunsa node slow hai' ya 'kahan galat route hua' seedha dikh jaata hai. Hiring data mein PII hota hai, isliye maine Langfuse client par ek **mask function** lagaya: har string length-placeholder ban jaati hai, aur unknown type fail-closed hota hai. Third-party vendor ko structure aur metrics milte hain, content nahi. Har request ka ek **request ID** hai jo logs, trace tags aur response header mein jaata hai. Token usage ek callback se poore run (sub-agents samet) ke liye collect hota hai, response mein wapas jaata hai, aur Next.js use `AiUsageLog` mein user ke naam se save karta hai. Isi kaam mein ek pricing bug bhi pakda: dated model names ki cost $0 aa rahi thi."
+
+**Follow-up sawaal:**
+- *"Sab mask kar diya to debug kaise karoge?"* Structure, timing aur token count se zyadatar issues pakde jaate hain. Content-level debugging dev environment mein synthetic data aur `LANGFUSE_CAPTURE_CONTENT=true` ke saath hoti hai. Production ka content first-party DB mein rehta hai, third-party mein nahi.
+- *"Callback vs manual logging?"* Callback framework level par lagta hai, to naye nodes ya sub-agents apne aap trace hote hain. Manual logging mein koi na koi node chhoot jaata.
+- *"Sub-graph ki calls kaise count hui?"* Python 3.11+ mein LangChain config contextvars ke through child runnables tak propagate hota hai. Yeh maine ek test se verify kiya.

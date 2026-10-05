@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { logAgentUsage } from "@/lib/agentUsage";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -70,6 +71,7 @@ export async function POST(req: NextRequest) {
     }
 
     const agentData = await agentRes.json();
+    logAgentUsage(agentData.usage, { userId: session.user.id, feature: "agent:improve-resume" });
     const report = agentData.report;
 
     // Save improvement report to DB

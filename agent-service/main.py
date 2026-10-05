@@ -9,6 +9,7 @@ Endpoints:
 
 import logging
 import os
+from contextlib import asynccontextmanager
 import secrets
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Header
@@ -18,18 +19,43 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from core.observability import RequestIdLogFilter, flush as flush_traces, new_request_id, request_id_var, run_agent
+
+_log_handler = logging.StreamHandler()
+_log_handler.addFilter(RequestIdLogFilter())
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    format="%(asctime)s %(levelname)s %(name)s [req=%(request_id)s] %(message)s",
+    handlers=[_log_handler],
 )
 
 from agent import resume_agent, ResumeImprovementState
 
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    flush_traces()  # don't drop buffered Langfuse spans on shutdown / redeploy
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Resume Improvement Agent",
     description="LangGraph-powered resume improvement microservice",
     version="1.0.0"
 )
+
+# ── Request ID — correlates logs, Langfuse traces and the caller ──
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    request_id = new_request_id(request.headers.get("x-request-id"))
+    token = request_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+    response.headers["x-request-id"] = request_id
+    return response
+
 
 # ── CORS — allow Next.js to call this ───────────────────────────
 app.add_middleware(
@@ -70,6 +96,7 @@ class ImproveResumeResponse(BaseModel):
     success: bool
     report: dict
     logs: list
+    usage: dict = {}
 
 
 # ── Auth check ───────────────────────────────────────────────────
@@ -157,7 +184,7 @@ async def improve_resume(
 
     try:
         # 🚀 Run the LangGraph agent
-        final_state = await resume_agent.ainvoke(initial_state)
+        final_state, usage = await run_agent("improve-resume", resume_agent, initial_state, user_id=request.user_id)
 
         report = final_state.get("improvement_report", {})
         logs   = final_state.get("logs", [])
@@ -166,6 +193,7 @@ async def improve_resume(
             success=True,
             report=report,
             logs=logs,
+            usage=usage,
         )
 
     except Exception as e:
@@ -238,9 +266,10 @@ async def evaluate_interview(
         "logs": [],
     }
 
-    final_state = await interview_evaluator_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("evaluate-interview", interview_evaluator_agent, initial_state)
     return {
         "success": True,
+        "usage": usage,
         "overallScore": final_state.get("overall_score", 0),
         "technicalScore": final_state.get("technical_score", 0),
         "communicationScore": final_state.get("communication_score", 0),
@@ -296,9 +325,10 @@ async def screen_candidate(
         "logs": [],
     }
 
-    final_state = await candidate_screening_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("screen-candidate", candidate_screening_agent, initial_state)
     return {
         "success": True,
+        "usage": usage,
         "report": final_state.get("screening_report", {}),
         "logs": final_state.get("logs", []),
     }
@@ -335,9 +365,10 @@ async def generate_learning_path(
         "logs": [],
     }
 
-    final_state = await learning_path_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("learning-path", learning_path_agent, initial_state)
     return {
         "success": True,
+        "usage": usage,
         "plan": final_state.get("learning_plan", {}),
         "totalWeeks": final_state.get("total_weeks", 0),
         "logs": final_state.get("logs", []),
@@ -373,9 +404,10 @@ async def panel_interview(
         "logs": [],
     }
 
-    final_state = await interview_panel_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("panel-interview", interview_panel_agent, initial_state)
     return {
         "success": True,
+        "usage": usage,
         "report": final_state.get("panel_report", {}),
         "logs": final_state.get("logs", []),
     }
@@ -412,9 +444,10 @@ async def market_intelligence(
         "logs": [],
     }
 
-    final_state = await market_intelligence_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("market-intelligence", market_intelligence_agent, initial_state)
     return {
         "success": True,
+        "usage": usage,
         "report": final_state.get("market_report", {}),
         "logs": final_state.get("logs", []),
     }
@@ -453,9 +486,10 @@ async def daily_ops(
         "logs": [],
     }
 
-    final_state = await daily_ops_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("daily-ops", daily_ops_agent, initial_state)
     return {
         "success": True,
+        "usage": usage,
         "report": final_state.get("report", {}),
         "logs": final_state.get("logs", []),
     }
@@ -536,10 +570,11 @@ async def run_job_match(
         "logs": [],
     }
 
-    final_state = await job_match_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("job-match", job_match_agent, initial_state, user_id=request.user_id or None)
 
     return {
         "success": True,
+        "usage": usage,
         "report": final_state.get("final_report", {}),
         "logs": final_state.get("logs", []),
     }
@@ -579,10 +614,11 @@ async def run_auto_apply(
         "logs": [],
     }
 
-    final_state = await auto_apply_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("auto-apply", auto_apply_agent, initial_state)
 
     return {
         "success": True,
+        "usage": usage,
         "found_jobs": final_state.get("found_jobs", []),
         "tailored_resumes": final_state.get("tailored_resumes", []),
         "cover_letters": final_state.get("cover_letters", []),
@@ -637,10 +673,11 @@ async def orchestrate(
         "logs": [],
     }
 
-    final_state = await orchestrator_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("orchestrate", orchestrator_agent, initial_state)
 
     return {
         "success": True,
+        "usage": usage,
         **final_state.get("final_response", {}),
         "logs": final_state.get("logs", []),
     }
@@ -682,10 +719,11 @@ async def schedule_interview(
         "logs": [],
     }
 
-    final_state = await scheduler_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("schedule-interview", scheduler_agent, initial_state)
 
     return {
         "success": True,
+        "usage": usage,
         "calendarSource": final_state.get("calendar_source"),
         "proposedSlots": final_state.get("proposed_slots", []),
         "confirmationMessage": final_state.get("confirmation_message", ""),
@@ -747,10 +785,11 @@ async def faq_ask(
         "logs": [],
     }
 
-    final_state = await faq_agent.ainvoke(initial_state)
+    final_state, usage = await run_agent("faq-ask", faq_agent, initial_state)
 
     return {
         "success": True,
+        "usage": usage,
         "answer": final_state.get("answer", ""),
         "sources": final_state.get("sources", []),
         "faithfulness": final_state.get("faithfulness", 0.0),

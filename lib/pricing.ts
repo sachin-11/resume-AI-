@@ -9,7 +9,17 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
 
 const DEFAULT_PRICING = { input: 0, output: 0 };
 
+// Providers report dated snapshots ("gpt-4o-mini-2024-07-18"); match those to
+// their base entry by longest prefix.
+function pricingFor(model: string) {
+  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+  const base = Object.keys(MODEL_PRICING)
+    .filter((key) => model.startsWith(key))
+    .sort((a, b) => b.length - a.length)[0];
+  return base ? MODEL_PRICING[base] : DEFAULT_PRICING;
+}
+
 export function calcCostUsd(model: string, promptTokens: number, completionTokens: number): number {
-  const rate = MODEL_PRICING[model] ?? DEFAULT_PRICING;
+  const rate = pricingFor(model);
   return (promptTokens / 1_000_000) * rate.input + (completionTokens / 1_000_000) * rate.output;
 }
