@@ -11,9 +11,8 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-import secrets
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -22,6 +21,7 @@ from langchain_core.messages import HumanMessage
 load_dotenv()
 
 from core import memory
+from core.auth import Caller, get_caller, resolve_user_id
 from core.observability import RequestIdLogFilter, flush as flush_traces, new_request_id, request_id_var, run_agent
 
 _log_handler = logging.StreamHandler()
@@ -107,14 +107,6 @@ class ImproveResumeResponse(BaseModel):
     usage: dict = {}
 
 
-# ── Auth check ───────────────────────────────────────────────────
-def verify_secret(x_agent_secret: Optional[str] = Header(None)):
-    # Fail closed: an unset AGENT_SECRET must lock the service down, never fall
-    # back to a shared default that's sitting in the public source of both sides.
-    if not AGENT_SECRET or not x_agent_secret or not secrets.compare_digest(x_agent_secret, AGENT_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid agent secret")
-
-
 # ── Routes ───────────────────────────────────────────────────────
 @app.get("/health")
 def health():
@@ -147,7 +139,7 @@ def graph_info():
 @app.post("/improve-resume", response_model=ImproveResumeResponse)
 async def improve_resume(
     request: ImproveResumeRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Main endpoint — runs the full LangGraph resume improvement pipeline.
@@ -159,7 +151,8 @@ async def improve_resume(
     4. Re-score and loop if needed (up to max_iterations)
     5. Return full improvement report
     """
-    verify_secret(x_agent_secret)
+
+    user_id = resolve_user_id(caller, request.user_id)
 
     if not request.resume_text or len(request.resume_text) < 50:
         raise HTTPException(status_code=400, detail="Resume text too short")
@@ -171,7 +164,7 @@ async def improve_resume(
     initial_state: ResumeImprovementState = {
         "resume_text":    request.resume_text,
         "resume_id":      request.resume_id,
-        "user_id":        request.user_id,
+        "user_id":        user_id,
         "target_role":    request.target_role,
         "job_description": request.job_description,
         "initial_score":  0,
@@ -193,7 +186,7 @@ async def improve_resume(
 
     try:
         # 🚀 Run the LangGraph agent
-        final_state, usage = await run_agent("improve-resume", resume_agent, initial_state, user_id=request.user_id)
+        final_state, usage = await run_agent("improve-resume", resume_agent, initial_state, user_id=user_id)
 
         report = final_state.get("improvement_report", {})
         logs   = final_state.get("logs", [])
@@ -246,10 +239,9 @@ class InterviewEvaluatorRequest(BaseModel):
 @app.post("/evaluate-interview")
 async def evaluate_interview(
     request: InterviewEvaluatorRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """Dynamic interview evaluation with contradiction detection."""
-    verify_secret(x_agent_secret)
 
     if not request.qa_pairs:
         raise HTTPException(status_code=400, detail="qa_pairs required")
@@ -306,10 +298,9 @@ class CandidateScreeningRequest(BaseModel):
 @app.post("/screen-candidate")
 async def screen_candidate(
     request: CandidateScreeningRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """Multi-source candidate screening with GitHub verification."""
-    verify_secret(x_agent_secret)
 
     initial_state = {
         "resume_text": request.resume_text,
@@ -355,10 +346,9 @@ class LearningPathRequest(BaseModel):
 @app.post("/generate-learning-path")
 async def generate_learning_path(
     request: LearningPathRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """Personalized adaptive learning path generation."""
-    verify_secret(x_agent_secret)
 
     initial_state = {
         "weak_areas": request.weak_areas,
@@ -394,10 +384,9 @@ class InterviewPanelRequest(BaseModel):
 @app.post("/panel-interview")
 async def panel_interview(
     request: InterviewPanelRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """Multi-agent panel interview evaluation (Technical + HR + Domain)."""
-    verify_secret(x_agent_secret)
 
     initial_state = {
         "resume_text": request.resume_text,
@@ -433,10 +422,9 @@ class MarketIntelligenceRequest(BaseModel):
 @app.post("/market-intelligence")
 async def market_intelligence(
     request: MarketIntelligenceRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """Resume market intelligence — demand score, salary, skill gaps."""
-    verify_secret(x_agent_secret)
 
     initial_state = {
         "resume_text": request.resume_text,
@@ -472,13 +460,12 @@ class DailyOpsRequest(BaseModel):
 @app.post("/daily-ops")
 async def daily_ops(
     request: DailyOpsRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Summaries, standups, inbox digests from pasted text.
     Connectors (Gmail API, etc.) are optional; paste exports or threads here.
     """
-    verify_secret(x_agent_secret)
 
     if not request.user_context or len(request.user_context.strip()) < 12:
         raise HTTPException(status_code=400, detail="user_context required (paste emails, notes, tickets, etc.)")
@@ -536,7 +523,7 @@ class JobMatchRequest(BaseModel):
 @app.post("/job-match-agent")
 async def run_job_match(
     request: JobMatchRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Deep job match analysis agent.
@@ -546,18 +533,19 @@ async def run_job_match(
     Returns: fit score, JD intelligence, competitive gaps, mock interview Q&A,
              salary range, negotiation tip, application strategy.
     """
-    verify_secret(x_agent_secret)
 
     if len(request.resume_text.strip()) < 50:
         raise HTTPException(status_code=400, detail="resume_text too short")
     if len(request.job_description.strip()) < 50:
         raise HTTPException(status_code=400, detail="job_description too short")
 
+    user_id = resolve_user_id(caller, request.user_id or None)
+
     initial_state = {
         "resume_text":     request.resume_text,
         "job_description": request.job_description,
         "resume_id":       request.resume_id,
-        "user_id":         request.user_id,
+        "user_id":         user_id,
         # Node 1 outputs
         "jd_title": "", "jd_company": "",
         "jd_must_have": [], "jd_nice_to_have": [],
@@ -579,7 +567,7 @@ async def run_job_match(
         "logs": [],
     }
 
-    final_state, usage = await run_agent("job-match", job_match_agent, initial_state, user_id=request.user_id or None)
+    final_state, usage = await run_agent("job-match", job_match_agent, initial_state, user_id=user_id)
 
     return {
         "success": True,
@@ -601,12 +589,11 @@ class AutoApplyRequest(BaseModel):
 @app.post("/auto-apply")
 async def run_auto_apply(
     request: AutoApplyRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Automated job search, scoring, resume tailoring and cover letter pipeline.
     """
-    verify_secret(x_agent_secret)
 
     initial_state = {
         "resume_text": request.resume_text,
@@ -638,8 +625,8 @@ async def run_auto_apply(
 # ── Orchestrator: Recruitment Copilot Router ──────────────────────
 class OrchestrateRequest(BaseModel):
     user_message: str
-    # Multi-turn memory: send user_id (and thread_id to continue a conversation).
-    # Without user_id the turn runs statelessly, as before.
+    # Multi-turn memory: authenticate with a user token (or, legacy, send user_id)
+    # and pass thread_id to continue a conversation. Without a user it runs statelessly.
     user_id: Optional[str] = None
     thread_id: Optional[str] = None
     # Context fields persist in the thread once given; omit them on later turns.
@@ -664,7 +651,7 @@ def _thread_or_400(user_id: Optional[str], thread_id: Optional[str]) -> str:
 @app.post("/orchestrate")
 async def orchestrate(
     request: OrchestrateRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Central LangGraph router — classifies a free-text message and dispatches
@@ -675,7 +662,6 @@ async def orchestrate(
     With `user_id`, the turn is part of a persisted conversation thread (a new
     `thread_id` is minted if none is given and returned in the response).
     """
-    verify_secret(x_agent_secret)
 
     if not request.user_message or len(request.user_message.strip()) < 3:
         raise HTTPException(status_code=400, detail="user_message required")
@@ -700,7 +686,8 @@ async def orchestrate(
         if value is not None:
             turn_state[field] = value
 
-    if not request.user_id:
+    user_id = resolve_user_id(caller, request.user_id)
+    if not user_id:
         stateless = {**{f: None for f in _CONTEXT_FIELDS}, "existing_slots": [], "logs": [], **turn_state}
         final_state, usage = await run_agent("orchestrate", orchestrator_agent, stateless)
         return {
@@ -711,7 +698,7 @@ async def orchestrate(
         }
 
     thread_id = request.thread_id or uuid.uuid4().hex
-    thread = _thread_or_400(request.user_id, thread_id)
+    thread = _thread_or_400(user_id, thread_id)
     copilot = app.state.copilot
 
     # `logs` is append-only across the thread; return only this turn's lines.
@@ -721,7 +708,7 @@ async def orchestrate(
         turn_state.setdefault("existing_slots", [])
 
     final_state, usage = await run_agent(
-        "orchestrate", copilot, turn_state, user_id=request.user_id, thread=thread,
+        "orchestrate", copilot, turn_state, user_id=user_id, thread=thread,
     )
 
     return {
@@ -736,10 +723,10 @@ async def orchestrate(
 
 
 @app.get("/threads/{thread_id}")
-async def get_thread(thread_id: str, user_id: str, x_agent_secret: Optional[str] = Header(None)):
+async def get_thread(thread_id: str, user_id: Optional[str] = None, caller: Caller = Depends(get_caller)):
     """Conversation history of one of this user's Copilot threads."""
-    verify_secret(x_agent_secret)
-    snapshot = await app.state.copilot.aget_state({"configurable": {"thread_id": _thread_or_400(user_id, thread_id)}})
+    thread = _thread_or_400(resolve_user_id(caller, user_id), thread_id)
+    snapshot = await app.state.copilot.aget_state({"configurable": {"thread_id": thread}})
     values = snapshot.values or {}
     return {
         "thread_id": thread_id,
@@ -758,10 +745,9 @@ async def get_thread(thread_id: str, user_id: str, x_agent_secret: Optional[str]
 
 
 @app.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str, user_id: str, x_agent_secret: Optional[str] = Header(None)):
+async def delete_thread(thread_id: str, user_id: Optional[str] = None, caller: Caller = Depends(get_caller)):
     """Permanently delete a Copilot thread and all its checkpoints."""
-    verify_secret(x_agent_secret)
-    await app.state.copilot.checkpointer.adelete_thread(_thread_or_400(user_id, thread_id))
+    await app.state.copilot.checkpointer.adelete_thread(_thread_or_400(resolve_user_id(caller, user_id), thread_id))
     return {"success": True}
 
 
@@ -778,7 +764,7 @@ class ScheduleInterviewRequest(BaseModel):
 @app.post("/schedule-interview")
 async def schedule_interview(
     request: ScheduleInterviewRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Proposes interview slots and drafts a confirmation message.
@@ -786,7 +772,6 @@ async def schedule_interview(
     Nodes: propose_slots → draft_confirmation
     Fallback chain: Calendar MCP (opt-in) → app's InterviewSlot rows → generated business-hours slots.
     """
-    verify_secret(x_agent_secret)
 
     initial_state = {
         "candidate_name": request.candidate_name,
@@ -823,10 +808,9 @@ class FAQIngestRequest(BaseModel):
 @app.post("/faq/ingest")
 async def faq_ingest(
     request: FAQIngestRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """Chunk + embed + upsert a company policy/FAQ doc into Pinecone (namespaced via metadata type=policy_doc)."""
-    verify_secret(x_agent_secret)
 
     if len(request.text.strip()) < 20:
         raise HTTPException(status_code=400, detail="text too short")
@@ -844,14 +828,13 @@ class FAQAskRequest(BaseModel):
 @app.post("/faq/ask")
 async def faq_ask(
     request: FAQAskRequest,
-    x_agent_secret: Optional[str] = Header(None)
+    caller: Caller = Depends(get_caller)
 ):
     """
     Answers a question strictly from indexed company docs (RAG over Pinecone).
 
     Nodes: retrieve_docs → answer_question
     """
-    verify_secret(x_agent_secret)
 
     if not request.question or len(request.question.strip()) < 3:
         raise HTTPException(status_code=400, detail="question required")

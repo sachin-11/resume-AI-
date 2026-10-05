@@ -23,7 +23,7 @@ class RecordingFake(FakeListChatModel):
 def copilot(monkeypatch):
     """TestClient (lifespan → in-memory checkpointer) + a scripted LLM for both router and replies."""
     import main
-    monkeypatch.setattr(main, "AGENT_SECRET", "test-secret")
+    monkeypatch.setenv("AGENT_SECRET", "test-secret")
 
     def script(*replies):
         model = RecordingFake(responses=list(replies), seen=[])

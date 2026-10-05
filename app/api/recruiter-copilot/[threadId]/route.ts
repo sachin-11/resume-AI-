@@ -4,7 +4,8 @@
  * Both are scoped to the signed-in user by agent-service (thread key = user id + thread id).
  */
 import { NextRequest, NextResponse } from "next/server";
-import { AGENT_SECRET, AGENT_URL, THREAD_ID_RE, copilotUser } from "@/lib/copilot-agent";
+import { AGENT_URL, THREAD_ID_RE, copilotUser } from "@/lib/copilot-agent";
+import { agentHeaders } from "@/lib/agentAuth";
 
 async function proxy(method: "GET" | "DELETE", ctx: { params: Promise<{ threadId: string }> }) {
   const user = await copilotUser();
@@ -14,10 +15,10 @@ async function proxy(method: "GET" | "DELETE", ctx: { params: Promise<{ threadId
   if (!THREAD_ID_RE.test(threadId)) return NextResponse.json({ error: "Invalid thread id" }, { status: 400 });
 
   try {
-    const url = `${AGENT_URL}/threads/${threadId}?user_id=${encodeURIComponent(user.id)}`;
-    const res = await fetch(url, {
+    // agent-service scopes the thread to the user in the signed token.
+    const res = await fetch(`${AGENT_URL}/threads/${threadId}`, {
       method,
-      headers: { "x-agent-secret": AGENT_SECRET },
+      headers: await agentHeaders(user),
       signal: AbortSignal.timeout(15_000),
     });
     const data = await res.json();

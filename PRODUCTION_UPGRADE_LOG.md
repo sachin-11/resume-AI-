@@ -10,8 +10,8 @@
 | 1 | `core/`: Config + LLM Gateway + Pydantic structured output + tests | ✅ Done (Module 1) |
 | 1 | `core/observability.py`: per-node tracing, request ID, token/cost tracking | ✅ Done (Module 2) |
 | 2 | `core/memory.py`: Postgres checkpointer, multi-turn Copilot + chat UI | ✅ Done (Module 3) |
-| 2 | `api/`: JWT + org_id (multi-tenant) | ⏳ Next |
-| 3 | `hitl/`: interrupt() + approvals | ⬜ |
+| 2 | `core/auth.py`: per-user signed JWT + org_id (service auth) | ✅ Done (Module 4) |
+| 3 | `hitl/`: interrupt() + approvals | ⏳ Next |
 | 3 | `tools/`: registry, risk levels, MCP pool | ⬜ |
 | 4 | `supervisor/`: loop-style multi-step orchestrator, parallel panel | ⬜ |
 | 5 | `runtime/`: job queue, SSE streaming, rate limit | ⬜ |
@@ -375,3 +375,117 @@ TURN 3 "which skills was she missing?"    → other: "Asha was missing experienc
 - *"Checkpointer vs apni messages table?"* Checkpointer poori graph state save karta hai (sirf messages nahi), aur `interrupt()` / resume / time-travel ke liye zaroori hai. Apni table sirf chat history deti.
 - *"Short-term vs long-term memory?"* Checkpointer = ek thread ki memory. Long-term (cross-thread, jaise recruiter preferences) ke liye LangGraph `Store` ya vector DB, namespace per user/org.
 - *"Memory mein PII ka kya?"* First-party Postgres mein hai, Langfuse mein masked. Delete endpoint hai; retention/TTL agla kaam hai.
+
+---
+
+# Module 4: Service Auth (Per-user Signed JWT + org_id)
+
+## 1. Problem kya tha
+
+| # | Problem | Asar |
+|---|---|---|
+| 1 | Next.js → agent-service har request mein **ek hi shared secret** (`x-agent-secret`) **plaintext header** mein bhejta tha | Secret ek baar leak ho (log, proxy, misconfigured HTTP) to koi bhi saare agents chala sakta tha, hamesha ke liye (expiry nahi) |
+| 2 | Agent-service ko **pata nahi tha request kis user ki hai**. `user_id` request **body** mein aata tha | Secret wala koi bhi caller kisi bhi user ka `user_id` bhej ke uske **Copilot threads padh/delete** kar sakta tha (Module 3 ki isolation body par depend karti thi) |
+| 3 | `org_id` (team/organization) agent-service tak nahi pahunchta tha | Multi-tenant features (org-level memory, org-level cost, org-scoped data) ka base nahi tha |
+
+---
+
+## 2. Design
+
+```
+Next.js route (session user)                       agent-service
+──────────────────────────                         ─────────────
+agentHeaders({id, orgId, role})                    get_caller()  ← har endpoint par Depends
+  JWT HS256, key = AGENT_SECRET                       Authorization: Bearer <jwt>
+  iss=resume-ai-web  aud=agent-service                  → verify: HS256 only, aud, iss, exp, iat, sub
+  sub=<userId> org=<orgId> role=<role>                  → Caller(user_id=sub, org_id, role)
+  iat, exp=+120s, jti=uuid                            koi token nahi → legacy x-agent-secret (migration ke liye)
+                                                      token invalid → 401 (legacy par fallback NAHI)
+```
+
+| Decision | Kyun |
+|---|---|
+| **Secret ab sirf signing key** | Token mein secret nahi jaata, sirf HMAC signature. Ek token leak ho to bhi woh 2 minute mein expire, aur sirf usi user ke liye valid |
+| **User identity token se** (`resolve_user_id`) | Body ka `user_id` token se alag ho to **403**. Thread endpoints ab `user_id` query param ke bina chalte hain (token se) |
+| `algorithms=["HS256"]` **pinned** | `alg: none` aur algorithm-confusion attacks reject |
+| `aud` + `iss` check | Kisi aur service ke liye bana token yahan kaam nahi karega |
+| `exp` 120s + 30s leeway | Clock skew tolerate, lekin replay window chhota |
+| **Invalid token → reject, downgrade nahi** | Attacker galat token + purana secret bhej ke weak path par nahi ja sakta |
+| **Legacy secret migration ke liye on** (`AGENT_ALLOW_LEGACY_SECRET`, default `true`) | Next.js (Amplify) aur agent-service (Railway) alag deploy hote hain; jo pehle deploy ho, dono kaam karte rahein |
+| Koi naya env var zaroori nahi | Signing key wahi `AGENT_SECRET` hai jo dono taraf pehle se set hai |
+| `org_id` → Langfuse tag `org:<id>` (`caller_var` ContextVar) | Traces org ke hisaab se filter ho sakein; aage org-scoped memory/limits ka base |
+
+---
+
+## 3. Files
+
+### agent-service
+| File | Change |
+|---|---|
+| `core/auth.py` (naya) | `Caller` dataclass, `verify_token()`, FastAPI dependency `get_caller()`, `resolve_user_id()`, `caller_var` |
+| `main.py` | **15 endpoints** par `x_agent_secret` header + `verify_secret()` ki jagah `caller: Caller = Depends(get_caller)`. Purana `verify_secret` hataya. `improve-resume`, `job-match`, `orchestrate`, `GET/DELETE /threads` mein user ID `resolve_user_id` se |
+| `core/observability.py` | `run_config` caller se user/org leta hai (trace par `user_id` + `org:` tag) |
+| `requirements.txt` | `PyJWT==2.10.1` |
+
+### Next.js
+| File | Change |
+|---|---|
+| `lib/agentAuth.ts` (naya) | `agentHeaders(caller)`: `jose` `SignJWT` se token + (migration ke dauraan) legacy header. `AGENT_SEND_LEGACY_SECRET=false` se legacy band |
+| 10 routes (`agents/*` ke 5, `auto-apply/fetch-jobs`, `job-match-agent`, `resume/improve`, `recruiter-copilot` ke 2) | `headers: await agentHeaders(session.user)`; har route ka bekaar `AGENT_SECRET` constant hataya |
+| `lib/copilot-agent.ts` | `copilotUser()` ab `{id, orgId, role}` deta hai; `AGENT_SECRET` export hataya |
+| `app/api/recruiter-copilot/[threadId]` | Ab `?user_id=` nahi bhejta, user token se |
+| `app/api/agents/route.ts` | Public `/agents` catalogue call se secret header hataya (wahan auth tha hi nahi, bekaar mein secret bhej rahe the) |
+| `package.json` | `jose` direct dependency (pehle sirf `next-auth` ke through transitive tha) |
+
+---
+
+## 4. Verification
+
+**Unit tests** `tests/test_auth.py`, 13 naye tests (total **41 passed**):
+- Valid token → accept, user token se (stateful thread bana)
+- **Reject (401):** expired, galat key (forged), galat `aud`, galat `iss`, `alg=none`, garbage string
+- **No downgrade:** galat token + sahi legacy secret → 401
+- Body `user_id` ≠ token `sub` → **403**
+- Thread isolation token ke through: `alice` ka thread `bob` ke token se `exists: false`
+- Legacy secret migration mein chalta hai; `AGENT_ALLOW_LEGACY_SECRET=false` par band; `AGENT_SECRET` unset → sab locked
+
+**Cross-language interop** (asli `lib/agentAuth.ts`, `tsx` se):
+```
+Node (jose) sign → Python (PyJWT) verify:
+  Caller(via='jwt', user_id='cuid_user_123', org_id='org_9', role='recruiter') ✅
+galat key → InvalidSignatureError ✅
+legacy header: default on, AGENT_SEND_LEGACY_SECRET=false par off ✅
+```
+`npx tsc --noEmit` clean; ESLint mein sirf purane 4 warnings.
+
+---
+
+## 5. Deploy plan (2 phase)
+
+| Phase | Kya karna hai | Asar |
+|---|---|---|
+| **1 (abhi)** | Dono services deploy karo, koi env change nahi | Next.js token + legacy header dono bhejta hai; agent-service token ko prefer karta hai. Deploy order se fark nahi padta |
+| **2 (dono live hone ke baad)** | Next.js (Amplify): `AGENT_SEND_LEGACY_SECRET=false`; agent-service (Railway): `AGENT_ALLOW_LEGACY_SECRET=false` | Secret network par jaana band; sirf signed tokens accept |
+
+---
+
+## 6. Trade-offs aur jo baaki hai
+
+| Point | Detail |
+|---|---|
+| Symmetric key (HS256) | Dono services ke paas same key hai, to agent-service bhi token bana sakta hai. Do services ke beech theek hai; zyada services hon to RS256/EdDSA (private key sirf Next.js ke paas) better |
+| `jti` replay check nahi | 2 min window mein ek token dobara use ho sakta hai. Zaroorat ho to Redis mein `jti` store karke check |
+| Key rotation | Abhi ek hi key. Rotation ke liye `kid` header + do keys ek saath accept karna |
+| Role ka enforcement agent-service mein nahi | Role token mein aata hai, lekin permission check abhi Next.js mein hi hota hai (jaise Copilot = recruiter/admin) |
+| `org_id` abhi sirf traces mein | Org-scoped memory / quotas aage ke modules mein |
+
+---
+
+## 7. Interview mein kaise bolna hai
+
+> "Pehle Next.js aur Python agent-service ke beech ek shared secret header tha. Usse kaun call kar raha hai yeh pata nahi chalta tha, aur `user_id` body mein aata tha, jise bana ke koi bhi kisi ka Copilot thread padh sakta tha. Maine use **per-request signed JWT** se replace kiya: HS256, 2 minute expiry, `aud`/`iss` scoped, `sub` = user, `org` = organization. Agent-service user identity **sirf verified token se** leta hai; body ka `user_id` alag ho to 403. Algorithm pinned hai (`alg=none` reject), aur invalid token kabhi legacy secret par downgrade nahi hota. Dono services alag deploy hoti hain, isliye migration 2 phase mein hai: pehle dono auth accept, phir flags se legacy band. Python aur Node ke beech interop maine asli code se verify kiya."
+
+**Follow-up sawaal:**
+- *"JWT hi kyun, mTLS ya API gateway kyun nahi?"* mTLS service ko authenticate karta hai, **user** ko nahi. Mujhe har request ke saath user aur org identity chahiye thi, jo token claims se aati hai. Dono saath bhi lag sakte hain.
+- *"HS256 vs RS256?"* Do trusted services ke liye HS256 simple aur tez hai. Agar teesri service sirf verify kare aur sign na kar sake, tab asymmetric (RS256/EdDSA) lunga.
+- *"Token chori ho jaaye to?"* 2 minute expiry, ek user, ek audience. Aur chahiye to `jti` blacklist/replay cache.

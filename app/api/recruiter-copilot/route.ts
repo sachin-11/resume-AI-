@@ -8,7 +8,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { logAgentUsage } from "@/lib/agentUsage";
-import { AGENT_SECRET, AGENT_URL, THREAD_ID_RE, copilotUser } from "@/lib/copilot-agent";
+import { AGENT_URL, THREAD_ID_RE, copilotUser } from "@/lib/copilot-agent";
+import { agentHeaders } from "@/lib/agentAuth";
 
 const schema = z.object({
   message:        z.string().trim().min(3, "Message is too short").max(4000),
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
   try {
     const res = await fetch(`${AGENT_URL}/orchestrate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-agent-secret": AGENT_SECRET },
+      headers: await agentHeaders(user),
       body: JSON.stringify({
         user_message: body.message,
         user_id: user.id,

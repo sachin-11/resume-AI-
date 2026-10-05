@@ -12,6 +12,7 @@ import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { searchJobs, formatSalary } from "@/lib/jsearch";
 import { analyzeGap } from "@/lib/jobAgent";
 import { logAgentUsage } from "@/lib/agentUsage";
+import { agentHeaders } from "@/lib/agentAuth";
 
 // Basic keyword score when no resume is available
 function basicTitleScore(jobTitle: string, targetRole: string): number {
@@ -48,13 +49,10 @@ export async function POST(req: NextRequest) {
 
     // 🚀 Call Python LangGraph Auto Apply Agent!
     const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
-    // No insecure fallback — an unset AGENT_SECRET must fail auth, not silently
-    // agree with agent-service on a well-known default sitting in public source.
-    const AGENT_SECRET = process.env.AGENT_SECRET ?? "";
 
     const agentRes = await fetch(`${AGENT_URL}/auto-apply`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-agent-secret": AGENT_SECRET },
+      headers: await agentHeaders(session.user),
       body: JSON.stringify({
         resume_text: resumeText || "Basic developer profile with React and Node.js skills.",
         target_role: targetRole,

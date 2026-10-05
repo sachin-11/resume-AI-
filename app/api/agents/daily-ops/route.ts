@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { logAgentUsage } from "@/lib/agentUsage";
+import { agentHeaders } from "@/lib/agentAuth";
 
 const VALID_TASKS = new Set([
   "morning_summary",
@@ -31,9 +32,6 @@ export async function POST(req: NextRequest) {
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
-  // No insecure fallback — an unset AGENT_SECRET must fail auth, not silently
-  // agree with agent-service on a well-known default sitting in public source.
-  const AGENT_SECRET = process.env.AGENT_SECRET ?? "";
 
   const body = await req.json();
   const taskType = typeof body.taskType === "string" && VALID_TASKS.has(body.taskType)
@@ -52,7 +50,7 @@ export async function POST(req: NextRequest) {
   try {
     const res = await fetch(`${AGENT_URL}/daily-ops`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-agent-secret": AGENT_SECRET },
+      headers: await agentHeaders(session.user),
       body: JSON.stringify({
         task_type: taskType,
         user_context: userContext.slice(0, 120_000),

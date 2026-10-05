@@ -11,6 +11,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { logAgentUsage } from "@/lib/agentUsage";
+import { agentHeaders } from "@/lib/agentAuth";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -50,10 +51,7 @@ export async function POST(req: NextRequest) {
     // Call Python LangGraph microservice
     const agentRes = await fetch(`${AGENT_URL}/improve-resume`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-agent-secret": AGENT_SECRET,
-      },
+      headers: await agentHeaders(session.user),
       body: JSON.stringify({
         resume_text:     resume.rawText,
         resume_id:       resume.id,

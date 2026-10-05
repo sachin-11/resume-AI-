@@ -13,6 +13,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { z } from "zod";
 import { logAgentUsage, type AgentUsage } from "@/lib/agentUsage";
+import { agentHeaders } from "@/lib/agentAuth";
 
 const schema = z.object({
   resumeId:       z.string().min(1),
@@ -60,10 +61,7 @@ export async function POST(req: NextRequest) {
   try {
     const agentRes = await fetch(`${AGENT_URL}/job-match-agent`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-agent-secret": AGENT_SECRET,
-      },
+      headers: await agentHeaders(session.user),
       body: JSON.stringify({
         resume_text:     resume.rawText,
         job_description: jobDescription,

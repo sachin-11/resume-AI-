@@ -20,6 +20,8 @@ from typing import Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from core.auth import caller_var
+
 logger = logging.getLogger("agent.observability")
 
 # Set per request by the FastAPI middleware; read by logs and run configs.
@@ -142,6 +144,9 @@ def run_config(
     conversation's turns as one Langfuse session.
     """
     request_id = request_id_var.get()
+    caller = caller_var.get()
+    if caller and not user_id:
+        user_id = caller.user_id
     callbacks: list = [usage]
     handler = _langfuse_handler()
     if handler is not None:
@@ -149,7 +154,8 @@ def run_config(
 
     metadata = {
         "langfuse_trace_name": agent,
-        "langfuse_tags": [f"agent:{agent}", f"request:{request_id}"],
+        "langfuse_tags": [f"agent:{agent}", f"request:{request_id}"]
+        + ([f"org:{caller.org_id}"] if caller and caller.org_id else []),
         "request_id": request_id,
     }
     if user_id:
