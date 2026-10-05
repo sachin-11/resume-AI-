@@ -8,7 +8,7 @@ Personalized Learning Path Agent — Graph
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, List, Optional, Annotated
 import operator
-from agents.shared.llm import get_llm, safe_json_parse
+from core.llm import get_llm, safe_json_parse
 
 
 class LearningPathState(TypedDict):

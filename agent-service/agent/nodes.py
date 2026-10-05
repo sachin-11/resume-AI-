@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from agent.state import ResumeImprovementState
-from agents.shared.llm import get_llm, safe_json_parse
+from core.llm import get_llm, safe_json_parse
 from core.llm import invoke_structured
 from core.types import Score
 

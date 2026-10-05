@@ -4,7 +4,6 @@ Resume Improvement Agent — FastAPI Server
 Endpoints:
   POST /improve-resume   → Run the LangGraph agent
   GET  /health           → Health check
-  GET  /graph-info       → Show graph structure (for debugging)
 """
 
 import logging
@@ -145,24 +144,6 @@ def list_tools(caller: Caller = Depends(get_caller)):
     return {"tools": tools.inventory()}
 
 
-@app.get("/graph-info")
-def graph_info():
-    """Returns the graph structure — useful for understanding the agent flow."""
-    return {
-        "nodes": ["analyze", "identify_gaps", "rewrite", "score_check", "finalize"],
-        "flow": [
-            "START → analyze",
-            "analyze → identify_gaps",
-            "identify_gaps → rewrite",
-            "rewrite → score_check",
-            "score_check → rewrite (if score < 70 AND iteration < max)",
-            "score_check → finalize (if score >= 70 OR iteration >= max)",
-            "finalize → END"
-        ],
-        "description": "Iterative resume improvement agent. Loops until ATS score >= 70 or max iterations reached."
-    }
-
-
 @app.post("/improve-resume", response_model=ImproveResumeResponse)
 async def improve_resume(
     request: ImproveResumeRequest,
@@ -240,7 +221,6 @@ if __name__ == "__main__":
 # NEW AGENTS — Advanced LangGraph Agents (+ Daily Ops)
 # ═══════════════════════════════════════════════════════════════
 
-from agents.interview_evaluator.graph import interview_evaluator_agent
 from agents.candidate_screening.graph import candidate_screening_agent
 from agents.learning_path.graph import learning_path_agent
 from agents.interview_panel.graph import interview_panel_agent
@@ -249,71 +229,10 @@ from agents.daily_ops.graph import daily_ops_agent
 from agents.job_match.graph import job_match_agent
 from agents.auto_apply.graph import auto_apply_agent
 from agents.orchestrator.graph import orchestrator_agent
-from agents.scheduler.graph import scheduler_agent
-from agents.faq.graph import faq_agent
 from agents.faq.store import ingest_policy_doc
 
 
-# ── Agent 1: Interview Evaluator ─────────────────────────────────
-class InterviewEvaluatorRequest(BaseModel):
-    session_id: str
-    role: str
-    round_type: str = "technical"
-    qa_pairs: list          # [{question, answer}]
-    resume_text: Optional[str] = None
-
-
-@app.post("/evaluate-interview")
-async def evaluate_interview(
-    request: InterviewEvaluatorRequest,
-    caller: Caller = Depends(limited_caller)
-):
-    """Dynamic interview evaluation with contradiction detection."""
-
-    if not request.qa_pairs:
-        raise HTTPException(status_code=400, detail="qa_pairs required")
-
-    initial_state = {
-        "session_id": request.session_id,
-        "role": request.role,
-        "round_type": request.round_type,
-        "qa_pairs": request.qa_pairs,
-        "resume_text": request.resume_text or "",
-        "evaluated_qa": [],
-        "current_idx": 0,
-        "contradictions": [],
-        "overall_score": 0,
-        "technical_score": 0,
-        "communication_score": 0,
-        "confidence_score": 0,
-        "strengths": [],
-        "weak_areas": [],
-        "improvement_roadmap": [],
-        "summary": "",
-        "hire_recommendation": "maybe",
-        "logs": [],
-    }
-
-    final_state, usage = await run_agent("evaluate-interview", interview_evaluator_agent, initial_state)
-    return {
-        "success": True,
-        "usage": usage,
-        "overallScore": final_state.get("overall_score", 0),
-        "technicalScore": final_state.get("technical_score", 0),
-        "communicationScore": final_state.get("communication_score", 0),
-        "confidenceScore": final_state.get("confidence_score", 0),
-        "strengths": final_state.get("strengths", []),
-        "weakAreas": final_state.get("weak_areas", []),
-        "improvementRoadmap": final_state.get("improvement_roadmap", []),
-        "summary": final_state.get("summary", ""),
-        "hireRecommendation": final_state.get("hire_recommendation", "maybe"),
-        "contradictions": final_state.get("contradictions", []),
-        "evaluatedQA": final_state.get("evaluated_qa", []),
-        "logs": final_state.get("logs", []),
-    }
-
-
-# ── Agent 2: Candidate Screening ─────────────────────────────────
+# ── Agent 1: Candidate Screening ─────────────────────────────────
 class CandidateScreeningRequest(BaseModel):
     resume_text: str
     job_description: str
@@ -363,7 +282,7 @@ async def screen_candidate(
     }
 
 
-# ── Agent 3: Learning Path ────────────────────────────────────────
+# ── Agent 2: Learning Path ────────────────────────────────────────
 class LearningPathRequest(BaseModel):
     weak_areas: list
     current_skills: list
@@ -403,7 +322,7 @@ async def generate_learning_path(
     }
 
 
-# ── Agent 4: Interview Panel ──────────────────────────────────────
+# ── Agent 3: Interview Panel ──────────────────────────────────────
 class InterviewPanelRequest(BaseModel):
     resume_text: str
     role: str
@@ -440,7 +359,7 @@ async def panel_interview(
     }
 
 
-# ── Agent 5: Market Intelligence ─────────────────────────────────
+# ── Agent 4: Market Intelligence ─────────────────────────────────
 class MarketIntelligenceRequest(BaseModel):
     resume_text: str
     target_role: Optional[str] = None
@@ -479,7 +398,7 @@ async def market_intelligence(
     }
 
 
-# ── Agent 6: Daily Ops (productivity digest) ─────────────────────
+# ── Agent 5: Daily Ops (productivity digest) ─────────────────────
 class DailyOpsRequest(BaseModel):
     task_type: str = "morning_summary"
     user_context: str
@@ -520,28 +439,7 @@ async def daily_ops(
     }
 
 
-# ── Graph info for all agents ─────────────────────────────────────
-@app.get("/agents")
-def list_agents():
-    return {
-        "agents": [
-            {"name": "resume-improvement",   "endpoint": "/improve-resume",        "description": "Iteratively improves resume ATS score"},
-            {"name": "interview-evaluator",  "endpoint": "/evaluate-interview",    "description": "Dynamic evaluation with contradiction detection"},
-            {"name": "candidate-screening",  "endpoint": "/screen-candidate",      "description": "Multi-source screening with GitHub verification"},
-            {"name": "learning-path",        "endpoint": "/generate-learning-path","description": "Personalized adaptive learning plan"},
-            {"name": "interview-panel",      "endpoint": "/panel-interview",       "description": "3-agent panel: Technical + HR + Domain"},
-            {"name": "market-intelligence",  "endpoint": "/market-intelligence",   "description": "Salary, demand score, skill gap analysis"},
-            {"name": "daily-ops",            "endpoint": "/daily-ops",             "description": "Morning brief, standup, Gmail/Slack-style digests from pasted context"},
-            {"name": "job-match",            "endpoint": "/job-match-agent",       "description": "Deep JD fit analysis, mock interview, salary intel, application strategy"},
-            {"name": "auto-apply",           "endpoint": "/auto-apply",             "description": "Automated pipeline for matching and applying to listings via MCP"},
-            {"name": "orchestrator",         "endpoint": "/orchestrate",            "description": "Routes a free-text message to the right sub-agent: resume screening, scheduling, or FAQ"},
-            {"name": "scheduler",            "endpoint": "/schedule-interview",     "description": "Proposes interview slots (Calendar MCP → InterviewSlot rows → generated) and drafts a confirmation message"},
-            {"name": "faq-answerer",         "endpoint": "/faq/ask",                "description": "Answers questions from indexed company policy docs via Pinecone RAG (POST /faq/ingest to index a doc)"},
-        ]
-    }
-
-
-# ── Agent 7: Job Match ────────────────────────────────────────────
+# ── Agent 6: Job Match ────────────────────────────────────────────
 class JobMatchRequest(BaseModel):
     resume_text: str
     job_description: str
@@ -606,7 +504,7 @@ async def run_job_match(
     }
 
 
-# ── Agent 8: Auto Apply Agent (Scrapes + Matches + Cover Letters) ──
+# ── Agent 7: Auto Apply Agent (Scrapes + Matches + Cover Letters) ──
 class AutoApplyRequest(BaseModel):
     resume_text: str
     target_role: str
@@ -880,54 +778,7 @@ async def delete_thread(thread_id: str, user_id: Optional[str] = None, caller: C
     return {"success": True}
 
 
-# ── Scheduler: Interview slot proposal ─────────────────────────────
-class ScheduleInterviewRequest(BaseModel):
-    candidate_name: str
-    candidate_email: str
-    role: str
-    requested_timeframe: str = ""
-    timezone: str = "Asia/Kolkata"
-    existing_slots: list = []   # InterviewSlot rows {id, startsAt, durationMin, isBooked}
-
-
-@app.post("/schedule-interview")
-async def schedule_interview(
-    request: ScheduleInterviewRequest,
-    caller: Caller = Depends(limited_caller)
-):
-    """
-    Proposes interview slots and drafts a confirmation message.
-
-    Nodes: propose_slots → draft_confirmation
-    Fallback chain: Calendar MCP (opt-in) → app's InterviewSlot rows → generated business-hours slots.
-    """
-
-    initial_state = {
-        "candidate_name": request.candidate_name,
-        "candidate_email": request.candidate_email,
-        "role": request.role,
-        "requested_timeframe": request.requested_timeframe,
-        "timezone": request.timezone,
-        "existing_slots": request.existing_slots,
-        "calendar_source": "",
-        "proposed_slots": [],
-        "confirmation_message": "",
-        "logs": [],
-    }
-
-    final_state, usage = await run_agent("schedule-interview", scheduler_agent, initial_state)
-
-    return {
-        "success": True,
-        "usage": usage,
-        "calendarSource": final_state.get("calendar_source"),
-        "proposedSlots": final_state.get("proposed_slots", []),
-        "confirmationMessage": final_state.get("confirmation_message", ""),
-        "logs": final_state.get("logs", []),
-    }
-
-
-# ── FAQ Answerer: company-docs RAG ─────────────────────────────────
+# ── FAQ: index company policy docs (answered via the Copilot's FAQ step) ──
 class FAQIngestRequest(BaseModel):
     doc_id: str
     title: str
@@ -948,48 +799,6 @@ async def faq_ingest(
     if not result.get("success"):
         raise HTTPException(status_code=503, detail=result.get("message", "Ingestion failed"))
     return result
-
-
-class FAQAskRequest(BaseModel):
-    question: str
-
-
-@app.post("/faq/ask")
-async def faq_ask(
-    request: FAQAskRequest,
-    caller: Caller = Depends(limited_caller)
-):
-    """
-    Answers a question strictly from indexed company docs (RAG over Pinecone).
-
-    Nodes: retrieve_docs → answer_question
-    """
-
-    if not request.question or len(request.question.strip()) < 3:
-        raise HTTPException(status_code=400, detail="question required")
-
-    initial_state = {
-        "question": request.question,
-        "retrieved_chunks": [],
-        "answer": "",
-        "sources": [],
-        "faithfulness": 0.0,
-        "answer_relevancy": 0.0,
-        "eval_reasoning": "",
-        "logs": [],
-    }
-
-    final_state, usage = await run_agent("faq-ask", faq_agent, initial_state)
-
-    return {
-        "success": True,
-        "usage": usage,
-        "answer": final_state.get("answer", ""),
-        "sources": final_state.get("sources", []),
-        "faithfulness": final_state.get("faithfulness", 0.0),
-        "answerRelevancy": final_state.get("answer_relevancy", 0.0),
-        "logs": final_state.get("logs", []),
-    }
 
 
 # ═══════════════════════════════════════════════════════════════

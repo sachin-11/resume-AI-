@@ -2,7 +2,7 @@
 Scheduler Agent — Nodes
 """
 from datetime import datetime, timedelta
-from agents.shared.llm import get_llm
+from core.llm import get_llm
 import agents.shared.tools  # noqa: F401  (registers the tools)
 from core.mcp_pool import pool
 from core.tools import call_tool

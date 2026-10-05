@@ -9,19 +9,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { searchJobs, formatSalary } from "@/lib/jsearch";
-import { analyzeGap } from "@/lib/jobAgent";
 import { logAgentUsage } from "@/lib/agentUsage";
 import { agentHeaders } from "@/lib/agentAuth";
-
-// Basic keyword score when no resume is available
-function basicTitleScore(jobTitle: string, targetRole: string): number {
-  const jt = jobTitle.toLowerCase();
-  const keywords = targetRole.toLowerCase().split(/\s+/).filter((k) => k.length > 2);
-  const hits = keywords.filter((k) => jt.includes(k)).length;
-  if (hits === 0) return 55;
-  return Math.min(60 + hits * 8, 82);
-}
 
 export async function POST(req: NextRequest) {
   try {

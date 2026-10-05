@@ -4,7 +4,7 @@ Job Match Agent — Nodes
 Flow:
   parse_jd → deep_match → mock_interview → salary_insight → strategy → build_report
 """
-from agents.shared.llm import get_llm, safe_json_parse
+from core.llm import get_llm, safe_json_parse
 
 
 async def parse_jd(state: dict) -> dict:

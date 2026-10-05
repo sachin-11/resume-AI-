@@ -1,9 +1,9 @@
 """
 FAQ Answerer Agent — Nodes
 """
-from agents.shared.llm import get_llm
+from core.llm import get_llm
 from agents.shared.eval import evaluate_rag_answer
-from agents.shared.observability import trace_guardrail
+from core.observability import trace_guardrail
 import agents.shared.tools  # noqa: F401  (registers the tools)
 from core.tools import call_tool
 

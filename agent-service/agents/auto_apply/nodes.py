@@ -2,7 +2,7 @@
 Auto Apply Agent — Nodes
 """
 import os
-from agents.shared.llm import get_llm, safe_json_parse
+from core.llm import get_llm, safe_json_parse
 import agents.shared.tools  # noqa: F401  (registers the tools)
 from core.tools import call_tool
 

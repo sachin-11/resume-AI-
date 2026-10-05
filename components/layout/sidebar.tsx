@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { can, ROLE_META, type UserRole } from "@/lib/permissions";
+import { ROLE_META, type UserRole } from "@/lib/permissions";
 import { useTheme } from "@/components/providers/theme-provider";
 
 // ── Candidate nav ────────────────────────────────────────────────

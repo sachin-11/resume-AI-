@@ -3,8 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Zap, Settings, RefreshCw, Loader2, CheckCircle2, XCircle,
   ExternalLink, Trash2, Mail, ChevronDown, ChevronUp, Copy,
-  Check, AlertCircle, Play, Pause, BarChart3, Briefcase,
-  MapPin, DollarSign, Clock, Send,
+  Check, AlertCircle, Briefcase, MapPin, DollarSign, Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 

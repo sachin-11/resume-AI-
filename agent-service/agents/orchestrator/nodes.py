@@ -7,8 +7,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, model_validator
 
-from agents.shared.llm import get_llm
-from agents.shared.observability import trace_guardrail
+from core.llm import get_llm
+from core.observability import trace_guardrail
 from agents.candidate_screening.graph import candidate_screening_agent
 from agents.scheduler.graph import scheduler_agent
 from agents.faq.graph import faq_agent

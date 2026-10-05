@@ -108,6 +108,15 @@ def extract_json(text: str):
     raise ValueError("No JSON found in model reply")
 
 
+def safe_json_parse(text: str, fallback):
+    """Legacy helper: parsed JSON, or `fallback` if the reply has none.
+    New code should use `ainvoke_structured` with a Pydantic schema instead."""
+    try:
+        return extract_json(text)
+    except Exception:
+        return fallback
+
+
 # ── Structured invocation ────────────────────────────────────────
 
 @dataclass

@@ -50,9 +50,6 @@ uvicorn main:app --reload --port 8000
 ```bash
 # Health check
 curl http://localhost:8000/health
-
-# Graph structure
-curl http://localhost:8000/graph-info
 ```
 
 ## Environment Variables

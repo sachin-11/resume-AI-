@@ -10,7 +10,7 @@ from langgraph.graph import StateGraph, END
 from typing import TypedDict, List, Annotated
 import operator
 
-from agents.shared.llm import get_llm, safe_json_parse
+from core.llm import get_llm, safe_json_parse
 
 # ── Task type → user-facing label (must match FastAPI + frontend values) ──
 TASK_LABELS = {
