@@ -1,19 +1,17 @@
 /**
  * POST /api/agents/panel-interview
- * 3-agent panel evaluation: Technical + HR + Domain
+ * 3-agent panel evaluation (Technical + HR + Domain, run in parallel), queued as a
+ * background job — returns { jobId }; poll /api/agent-jobs/[id] for progress and the report.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { logAgentUsage } from "@/lib/agentUsage";
-import { agentHeaders } from "@/lib/agentAuth";
+import { submitAgentJob } from "@/lib/agentJobs";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
 
   const { sessionId, resumeId } = await req.json();
 
@@ -47,21 +45,9 @@ export async function POST(req: NextRequest) {
     resumeText = resume?.rawText ?? "";
   }
 
-  try {
-    const res = await fetch(`${AGENT_URL}/panel-interview`, {
-      method: "POST",
-      headers: await agentHeaders(session.user),
-      body: JSON.stringify({
-        resume_text: resumeText,
-        role: interviewSession.role,
-        qa_pairs: qaPairs,
-      }),
-      signal: AbortSignal.timeout(120_000), // the 3 panelists run in parallel
-    });
-    const data = await res.json();
-    logAgentUsage(data.usage, { userId: session.user.id, feature: "agent:panel-interview" });
-    return NextResponse.json(data);
-  } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Agent failed" }, { status: 500 });
-  }
+  return submitAgentJob(session.user, "panel-interview", {
+    resume_text: resumeText,
+    role: interviewSession.role,
+    qa_pairs: qaPairs,
+  });
 }

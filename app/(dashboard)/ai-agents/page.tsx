@@ -6,6 +6,7 @@ import {
   Copy, Check, ExternalLink, Star, ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { runAgentJob } from "@/lib/agentJobClient";
 
 // ── Types ────────────────────────────────────────────────────────
 interface Resume { id: string; fileName: string; }
@@ -118,6 +119,9 @@ export default function AIAgentsPage() {
   const [learningLogs, setLearningLogs] = useState<string[]>([]);
 
   const [panelLoading, setPanelLoading] = useState(false);
+  // Live step from the background job ("Checking GitHub", "HR interviewer reviewing", …)
+  const [screeningStep, setScreeningStep] = useState<string | null>(null);
+  const [panelStep, setPanelStep] = useState<string | null>(null);
   const [panelResult, setPanelResult] = useState<Record<string, unknown> | null>(null);
   const [panelLogs, setPanelLogs] = useState<string[]>([]);
 
@@ -154,19 +158,26 @@ export default function AIAgentsPage() {
   // ── Agent runners ──────────────────────────────────────────────
   async function runScreening() {
     if (!selectedResume || !screeningJD.trim()) { setError("screening", "Select resume and paste JD"); return; }
-    clearError("screening"); setScreeningLoading(true); setScreeningResult(null);
-    const res = await fetch("/api/agents/screen-candidate", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        resumeId: selectedResume, 
-        jobDescription: screeningJD,
-        githubUsername: screeningGithub.trim() || undefined
-      }),
-    });
-    const data = await res.json();
-    setScreeningLoading(false);
-    if (!res.ok) { setError("screening", data.error ?? "Failed"); return; }
-    setScreeningResult(data.report); setScreeningLogs(data.logs ?? []);
+    clearError("screening"); setScreeningLoading(true); setScreeningResult(null); setScreeningStep(null);
+    try {
+      const job = await runAgentJob<{ report: Record<string, unknown>; logs: string[] }>(
+        () => fetch("/api/agents/screen-candidate", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resumeId: selectedResume,
+            jobDescription: screeningJD,
+            githubUsername: screeningGithub.trim() || undefined,
+          }),
+        }),
+        (step) => setScreeningStep(step),
+      );
+      if (job.status === "failed" || !job.result) { setError("screening", job.error ?? "Failed"); return; }
+      setScreeningResult(job.result.report); setScreeningLogs(job.result.logs ?? []);
+    } catch (err) {
+      setError("screening", err instanceof Error ? err.message : "Failed");
+    } finally {
+      setScreeningLoading(false); setScreeningStep(null);
+    }
   }
 
   async function runLearningPath() {
@@ -189,15 +200,22 @@ export default function AIAgentsPage() {
 
   async function runPanelInterview() {
     if (!selectedSession) { setError("panel", "Select a completed interview session"); return; }
-    clearError("panel"); setPanelLoading(true); setPanelResult(null);
-    const res = await fetch("/api/agents/panel-interview", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: selectedSession, resumeId: selectedResume || undefined }),
-    });
-    const data = await res.json();
-    setPanelLoading(false);
-    if (!res.ok) { setError("panel", data.error ?? "Failed"); return; }
-    setPanelResult(data.report); setPanelLogs(data.logs ?? []);
+    clearError("panel"); setPanelLoading(true); setPanelResult(null); setPanelStep(null);
+    try {
+      const job = await runAgentJob<{ report: Record<string, unknown>; logs: string[] }>(
+        () => fetch("/api/agents/panel-interview", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: selectedSession, resumeId: selectedResume || undefined }),
+        }),
+        (step) => setPanelStep(step),
+      );
+      if (job.status === "failed" || !job.result) { setError("panel", job.error ?? "Failed"); return; }
+      setPanelResult(job.result.report); setPanelLogs(job.result.logs ?? []);
+    } catch (err) {
+      setError("panel", err instanceof Error ? err.message : "Failed");
+    } finally {
+      setPanelLoading(false); setPanelStep(null);
+    }
   }
 
   async function runMarketIntelligence() {
@@ -446,7 +464,7 @@ export default function AIAgentsPage() {
 
             {errors.screening && <p className="text-red-400 text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3" />{errors.screening}</p>}
             <Button onClick={runScreening} disabled={screeningLoading} className="w-full gap-2 bg-green-600 hover:bg-green-700">
-              {screeningLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Screening...</> : <><Users className="h-4 w-4" />Screen Candidate</>}
+              {screeningLoading ? <><Loader2 className="h-4 w-4 animate-spin" />{screeningStep ? `${screeningStep}…` : "Screening..."}</> : <><Users className="h-4 w-4" />Screen Candidate</>}
             </Button>
           </div>
         </AgentCard>
@@ -537,7 +555,7 @@ export default function AIAgentsPage() {
             {sessions.length === 0 && <p className="text-xs text-yellow-400">⚠️ No completed sessions found. Complete an interview first.</p>}
             {errors.panel && <p className="text-red-400 text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3" />{errors.panel}</p>}
             <Button onClick={runPanelInterview} disabled={panelLoading || !selectedSession} className="w-full gap-2 bg-amber-600 hover:bg-amber-700">
-              {panelLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Panel evaluating...</> : <><Star className="h-4 w-4" />Run Panel Interview</>}
+              {panelLoading ? <><Loader2 className="h-4 w-4 animate-spin" />{panelStep ? `${panelStep}…` : "Panel evaluating..."}</> : <><Star className="h-4 w-4" />Run Panel Interview</>}
             </Button>
           </div>
         </AgentCard>

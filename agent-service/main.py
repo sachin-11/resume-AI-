@@ -21,9 +21,10 @@ from langgraph.types import Command
 
 load_dotenv()
 
-from core import memory, tools
+from core import jobs, memory, tools
 from core.mcp_pool import pool as mcp_pool
 from core.auth import Caller, get_caller, resolve_user_id
+from core.ratelimit import limited_caller
 from core.observability import trace_guardrail
 from core.observability import RequestIdLogFilter, flush as flush_traces, new_request_id, request_id_var, run_agent
 
@@ -43,7 +44,22 @@ async def lifespan(_app):
 
     # Multi-turn Recruitment Copilot: orchestrator compiled with conversation memory.
     _app.state.copilot = build_orchestrator_agent(checkpointer=await memory.open_checkpointer())
+
+    # Build the LLM clients now: the first build imports the provider SDKs (blocking,
+    # seconds), which would otherwise stall the event loop on the first request.
+    from core.llm import NoLLMProviderError, get_llm
+    try:
+        get_llm(), get_llm(tier="fast"), get_llm(temperature=0), get_llm(temperature=0, tier="fast")
+    except NoLLMProviderError:
+        logging.getLogger("agent").warning("No LLM provider configured — agent endpoints will fail")
+
+    # Background job workers share the checkpointer's Postgres pool (in-memory without it).
+    pool = memory.get_pool()
+    store = jobs.PostgresJobStore(pool) if pool is not None else jobs.MemoryJobStore()
+    _app.state.jobs = jobs.JobRunner(store, workers=int(os.getenv("AGENT_JOB_WORKERS", "2")))
+    await _app.state.jobs.start()
     yield
+    await _app.state.jobs.stop()  # before the pool closes under the workers
     flush_traces()  # don't drop buffered Langfuse spans on shutdown / redeploy
     await memory.close_checkpointer()
     await mcp_pool.close_all()  # stop long-lived MCP server processes
@@ -150,7 +166,7 @@ def graph_info():
 @app.post("/improve-resume", response_model=ImproveResumeResponse)
 async def improve_resume(
     request: ImproveResumeRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Main endpoint — runs the full LangGraph resume improvement pipeline.
@@ -250,7 +266,7 @@ class InterviewEvaluatorRequest(BaseModel):
 @app.post("/evaluate-interview")
 async def evaluate_interview(
     request: InterviewEvaluatorRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """Dynamic interview evaluation with contradiction detection."""
 
@@ -309,7 +325,7 @@ class CandidateScreeningRequest(BaseModel):
 @app.post("/screen-candidate")
 async def screen_candidate(
     request: CandidateScreeningRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """Multi-source candidate screening with GitHub verification."""
 
@@ -357,7 +373,7 @@ class LearningPathRequest(BaseModel):
 @app.post("/generate-learning-path")
 async def generate_learning_path(
     request: LearningPathRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """Personalized adaptive learning path generation."""
 
@@ -395,7 +411,7 @@ class InterviewPanelRequest(BaseModel):
 @app.post("/panel-interview")
 async def panel_interview(
     request: InterviewPanelRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """Multi-agent panel interview evaluation (Technical + HR + Domain)."""
 
@@ -433,7 +449,7 @@ class MarketIntelligenceRequest(BaseModel):
 @app.post("/market-intelligence")
 async def market_intelligence(
     request: MarketIntelligenceRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """Resume market intelligence — demand score, salary, skill gaps."""
 
@@ -471,7 +487,7 @@ class DailyOpsRequest(BaseModel):
 @app.post("/daily-ops")
 async def daily_ops(
     request: DailyOpsRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Summaries, standups, inbox digests from pasted text.
@@ -534,7 +550,7 @@ class JobMatchRequest(BaseModel):
 @app.post("/job-match-agent")
 async def run_job_match(
     request: JobMatchRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Deep job match analysis agent.
@@ -600,7 +616,7 @@ class AutoApplyRequest(BaseModel):
 @app.post("/auto-apply")
 async def run_auto_apply(
     request: AutoApplyRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Automated job search, scoring, resume tailoring and cover letter pipeline.
@@ -664,7 +680,7 @@ def _thread_or_400(user_id: Optional[str], thread_id: Optional[str]) -> str:
 @app.post("/orchestrate")
 async def orchestrate(
     request: OrchestrateRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Central LangGraph router — classifies a free-text message and dispatches
@@ -791,7 +807,7 @@ class ResumeRequest(BaseModel):
 
 
 @app.post("/threads/{thread_id}/resume")
-async def resume_thread(thread_id: str, request: ResumeRequest, caller: Caller = Depends(get_caller)):
+async def resume_thread(thread_id: str, request: ResumeRequest, caller: Caller = Depends(limited_caller)):
     """Answer a pending human-approval gate and let the paused run finish."""
     user_id = resolve_user_id(caller, request.user_id)
     thread = _thread_or_400(user_id, thread_id)
@@ -875,7 +891,7 @@ class ScheduleInterviewRequest(BaseModel):
 @app.post("/schedule-interview")
 async def schedule_interview(
     request: ScheduleInterviewRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Proposes interview slots and drafts a confirmation message.
@@ -919,7 +935,7 @@ class FAQIngestRequest(BaseModel):
 @app.post("/faq/ingest")
 async def faq_ingest(
     request: FAQIngestRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """Chunk + embed + upsert a company policy/FAQ doc into Pinecone (namespaced via metadata type=policy_doc)."""
 
@@ -939,7 +955,7 @@ class FAQAskRequest(BaseModel):
 @app.post("/faq/ask")
 async def faq_ask(
     request: FAQAskRequest,
-    caller: Caller = Depends(get_caller)
+    caller: Caller = Depends(limited_caller)
 ):
     """
     Answers a question strictly from indexed company docs (RAG over Pinecone).
@@ -972,3 +988,52 @@ async def faq_ask(
         "answerRelevancy": final_state.get("answer_relevancy", 0.0),
         "logs": final_state.get("logs", []),
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Background jobs — long agent runs without holding a request open
+# ═══════════════════════════════════════════════════════════════
+# The endpoint functions double as job handlers: handler(request=<model>, caller=Caller).
+jobs.register("screen-candidate", CandidateScreeningRequest, screen_candidate)
+jobs.register("panel-interview", InterviewPanelRequest, panel_interview)
+jobs.register("orchestrate", OrchestrateRequest, orchestrate)
+
+
+class JobSubmitRequest(BaseModel):
+    agent: str
+    input: dict
+    # Same key from the same user → the existing job is returned (double-click / retry safe).
+    idempotency_key: Optional[str] = Field(default=None, max_length=100)
+
+
+@app.post("/jobs", status_code=202)
+async def submit_job(body: JobSubmitRequest, caller: Caller = Depends(limited_caller)):
+    """Queue an agent run; poll GET /jobs/{id} for progress and the result."""
+    request_model = jobs.validate_input(body.agent, body.input)
+    job, created = await app.state.jobs.store.create(
+        agent=body.agent,
+        payload=request_model.model_dump(mode="json"),
+        caller=caller,
+        request_id=request_id_var.get(),
+        idempotency_key=body.idempotency_key,
+    )
+    return {"job_id": job["id"], "status": job["status"], "created": created}
+
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str, caller: Caller = Depends(get_caller)):
+    """Status, node-by-node progress, and (when done) the result or error."""
+    job = await app.state.jobs.store.get(job_id)
+    if not jobs.owns(job, caller):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return jobs.public_view(job)
+
+
+@app.post("/jobs/{job_id}/ack-usage")
+async def ack_job_usage(job_id: str, caller: Caller = Depends(get_caller)):
+    """Hand a finished job's token usage to the caller exactly once (for cost logging)."""
+    job = await app.state.jobs.store.get(job_id)
+    if not jobs.owns(job, caller):
+        raise HTTPException(status_code=404, detail="Job not found")
+    first = await app.state.jobs.store.ack_usage(job_id)
+    return {"first": first, "usage": (job.get("result") or {}).get("usage") if first else None}

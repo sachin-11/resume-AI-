@@ -14,8 +14,8 @@
 | 3 | Human-in-the-loop: `interrupt()` gates + approval UI + atomic booking | ✅ Done (Module 5) |
 | 3 | `core/tools.py` + `core/mcp_pool.py`: tool registry, least privilege, circuit breaker, MCP pool | ✅ Done (Module 6) |
 | 4 | Planner + supervisor loop (multi-step), parallel interview panel | ✅ Done (Module 7) |
-| 5 | `runtime/`: job queue, SSE streaming, rate limit | ⏳ Next |
-| 6 | `evals/` + `guardrails/`: CI gate, injection, bias | ⬜ |
+| 5 | Runtime: durable job queue (Postgres), live progress, LLM + per-user rate limits | ✅ Done (Module 8) |
+| 6 | `evals/` + `guardrails/`: CI gate, injection, bias | ⏳ Next |
 
 ---
 
@@ -830,3 +830,120 @@ Har reply par steps ke badges (`Resume screening → Scheduling`); FAQ sources a
 - *"Supervisor LLM kyun nahi?"* LLM har step par 'aage kya' decide kare to cost badhti hai, aur woh loop mein phans sakta hai ya condition ko galat padh sakta hai. Planning ek baar LLM se, execution deterministic: predictable, testable, sasta.
 - *"Parallel nodes mein state conflict?"* Har parallel node alag key likhta hai; shared list par reducer (`operator.add`). Same key par bina reducer ke do writes aayein to LangGraph `InvalidUpdateError` deta hai.
 - *"Infinite loop kaise roka?"* Plan max 3 steps, supervisor har pass mein index badhata hai, aur LangGraph ka recursion limit backstop hai.
+
+---
+
+# Module 8: Runtime — Durable Job Queue, Live Progress, Rate Limits
+
+## 1. Problem kya tha
+
+| # | Problem | Asar |
+|---|---|---|
+| 1 | Next.js (Amplify, serverless) agent-service ka **60–120s tak HTTP par wait** karta tha (screening, panel, Copilot) | Serverless timeout ya network blip = poora result lost; request worker itni der tak blocked |
+| 2 | LLM calls par **koi rate limit nahi** | Traffic burst = Groq free tier (~30 req/min) par **429**, aur retries se aur zyada load |
+| 3 | Agent-service par **per-user limit nahi** | Ek user (ya client retry loop) sabka shared LLM quota kha sakta tha |
+| 4 | User ko 15–40s tak sirf spinner | Pata nahi kaunsa step chal raha hai; lagta hai app hang hai |
+
+Infra decision: **naya infrastructure nahi.** Redis/Celery ki jagah wahi Postgres (`agent_memory` schema) jo checkpointer use karta hai.
+
+---
+
+## 2. Durable job queue (`core/jobs.py`)
+
+```
+Browser ──POST──► Next route ──POST /jobs──► agent-service ──INSERT queued──► agent_jobs (Postgres)
+   ▲  202 {jobId} (6 ms)                                                         │
+   │                                                 worker: UPDATE … FOR UPDATE SKIP LOCKED (claim + lease)
+   │                                                         run graph, heartbeat: progress + lease extend
+   └──poll GET /api/agent-jobs/[id] (1s → 2.5s)◄── GET /jobs/{id} ◄── status / progress / result
+```
+
+| Piece | Detail | Kyun |
+|---|---|---|
+| `agent_jobs` table | id, agent, status (`queued/running/succeeded/failed`), input, user/org/role/via, request_id, idempotency_key, **progress (jsonb)**, result, error + code, attempts, usage_acked, timestamps, **locked_until** | Startup par `CREATE TABLE IF NOT EXISTS`; Prisma ke `public` schema se alag |
+| **Claim** | `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *` | Kai workers/replicas ek hi job kabhi nahi uthate |
+| **Lease + heartbeat** | Claim par 60s lease; worker har 0.5s progress likhta hai aur lease badhata hai | Worker crash → lease expire → doosra worker job utha leta hai |
+| **Max 3 attempts** | Usse zyada → `failed: "Job was interrupted too many times"` | Crash karwane wali job (poison job) infinite retry nahi karti |
+| **Idempotency key** | Unique index `(user_id, idempotency_key)` | Double-click / retry par wahi job wapas, duplicate run nahi |
+| **Ownership** | Job sirf submit karne wale user ko dikhti hai (JWT `sub`); doosre ko 404 | Results mein PII hai |
+| **Errors** | `HTTPException` → uska code + detail (jaise Copilot ka 409 "waiting for approval"); baaki exceptions → generic "Agent run failed" (internals sirf log mein) | Stack trace user tak nahi |
+| Timeout | `AGENT_JOB_TIMEOUT_S` (600) → 504 | — |
+| **Handlers = existing endpoint functions** | `jobs.register("screen-candidate", CandidateScreeningRequest, screen_candidate)`; FastAPI decorator function wrap nahi karta | Zero duplicate code; sync endpoints bhi chalte rehte hain |
+| Context | Worker job ke saath `caller_var`, `request_id_var` set karta hai | Background run mein bhi auth identity, traces aur logs sahi |
+| **Usage exactly-once** | `POST /jobs/{id}/ack-usage`: atomic `UPDATE … WHERE NOT usage_acked`; Next sirf `first: true` par `AiUsageLog` likhta hai | Polling se cost double count nahi hoti |
+| Fallback | Postgres na ho (Windows local, tests) → `MemoryJobStore`, same interface | — |
+| Workers | `AGENT_JOB_WORKERS` (default 2) asyncio tasks, lifespan mein start/stop (pool band hone se pehle stop) | — |
+
+Pilot: **screen-candidate, panel-interview, orchestrate (Copilot)**. Job-match abhi sync hai, kyunki uska Next route result aane ke baad DB mein likhta hai.
+
+---
+
+## 3. Live progress
+- `ProgressCollector` (LangChain callback): har LangGraph node start par `{node, at}` record karta hai, **sub-agent nodes bhi** (`extract_info`, `fetch_github`, …). `progress_var` ContextVar se `run_agent` ke callbacks mein judta hai.
+- Browser: `lib/agentJobClient.ts → runAgentJob()` (submit → poll 1s, 30s baad 2.5s, max 10 min) + `progressLabel()` → "Checking GitHub", "Matching against the job", "HR interviewer reviewing", "Waiting for your decision"…
+- **SSE ki jagah polling:** serverless par long-lived streaming connections bharosemand nahi hote; 1s polling simple hai aur kahin bhi chalti hai.
+- UI: AI Agents hub ke Screening/Panel buttons aur Copilot ka loading bubble live step dikhate hain.
+
+---
+
+## 4. Rate limits
+| Layer | Kaise | Default |
+|---|---|---|
+| **LLM (per provider)** | LangChain `InMemoryRateLimiter` `ChatOpenAI/ChatGroq(rate_limiter=…)` mein; har provider ka **ek shared bucket**, saare models/tiers mein | Groq `GROQ_MAX_RPS=0.5` (30/min, free tier), OpenAI `OPENAI_MAX_RPS=0` (off). Burst = 5×rps |
+| **Per user** (`core/ratelimit.py`) | Token bucket, JWT user par; **14 `POST` agent endpoints** (`limited_caller` dependency). GET (status/history/tools) par nahi | `AGENT_USER_RPM=30`, `AGENT_USER_BURST=10` → `429` + `Retry-After` |
+| Legacy secret calls | User identity nahi, isliye limit nahi (Next.js ka per-IP limit lagta hai) | — |
+
+**Cold start fix:** pehle job ka pehla progress 4.4s par aaya, kyunki pehli LLM call provider SDK import karti thi (sync, event loop block). Ab LLM clients **startup par** bante hain.
+
+---
+
+## 5. Verification
+
+**Tests**: `tests/test_jobs.py`, 8 naye tests (total **82 passed**):
+- Background run + progress `extract_info → fetch_github → match_jd → build_report`
+- Doosre user ko 404; idempotency (same user same key → same job, doosra user → naya); unknown agent / galat input → 400 (queue hone se pehle)
+- Usage exactly once; per-user 429 (doosra user unaffected)
+- Handler crash → `failed`, generic message (internal detail leak nahi)
+- **Crash recovery:** lease expire → reclaim (attempts 2); cap ke baad `failed`
+
+**Postgres (asli local DB):**
+```
+SKIP LOCKED: 20 jobs, 4 concurrent workers → 20 claims, max 1 per job ✅
+idempotency (unique index): same id ✅
+screening job end-to-end: succeeded, progress extract_info → fetch_github → match_jd → build_report ✅
+usage ack: True, phir False ✅   (test rows delete kiye)
+```
+
+**Live (asli LLM, Copilot turn as job):**
+```
+submit → 202 in 6 ms
+t+4.4s   planner
+t+7.7s   supervisor → resume_screening → extract_info
+t+10.5s  fetch_github → match_jd
+t+12.4s  build_report → review_rejection → supervisor → scheduling → propose_slots → draft_confirmation
+t+14.6s  succeeded: screening (SHORTLIST 85) + scheduling
+```
+`tsc` + ESLint clean. **Browser UI test nahi hua.**
+
+---
+
+## 6. Trade-offs / jo baaki hai
+| Point | Detail |
+|---|---|
+| Polling vs push | 1–2.5s latency aur thode extra requests. Zaroorat ho to SSE/WebSocket |
+| Job retention | Jobs (input mein resume text) table mein rehti hain. Cleanup job (jaise 7 din) chahiye |
+| Copilot thread lock | Ek hi thread par do jobs ek saath chalein to race. UI input disable karta hai; server-side per-thread lock agla step |
+| Job-match, improve-resume | Abhi sync. Unka Next route result ke baad DB likhta hai, isliye "on completion" hook chahiye |
+| In-process workers | Worker aur API ek hi process mein. Load badhe to alag worker process/service (same table, same code) |
+| Rate limiter per process | Replicas × rps. Exact global limit ke liye Redis-based limiter |
+
+---
+
+## 7. Interview mein kaise bolna hai
+
+> "Lambe agent runs ke liye serverless function ko 1–2 minute wait karwana risky tha. Maine ek **durable job queue** banayi, bina naye infra ke, usi Postgres par jo checkpointer use karta hai. Submit turant 202 + job id deta hai. Workers `FOR UPDATE SKIP LOCKED` se claim karte hain, to do workers ek job nahi uthate; maine 4 concurrent workers aur 20 jobs se verify kiya. Har claim par lease hoti hai jise heartbeat badhata hai; worker mar jaaye to lease expire hokar job doosra worker uthata hai, aur 3 attempts ke baad fail. Idempotency key unique index par hai, aur cost logging exactly-once hai. Wahi heartbeat node-by-node progress likhta hai, to UI 'Checking GitHub… Matching against the job…' dikhata hai. Rate limiting do layer mein hai: provider-level LLM limiter (Groq ke 30 req/min ke andar) aur JWT user par per-user token bucket. Jo endpoint functions pehle the, wahi job handlers hain, koi duplicate logic nahi."
+
+**Follow-up sawaal:**
+- *"Redis/Celery kyun nahi?"* Postgres pehle se tha, `SKIP LOCKED` iske liye bana hai, aur hamara load chhota hai. Ek kam moving part. Throughput bahut badhe tab dedicated queue.
+- *"Exactly-once execution?"* Practically at-least-once (crash par retry). Isliye agent runs side-effect free rakhe hain (side effects HITL ke baad Next.js mein), aur cost logging alag se exactly-once hai.
+- *"SSE kyun nahi?"* Serverless par streaming connections timeout hote hain; polling har jagah chalti hai. Progress data same hai, transport kabhi bhi badla ja sakta hai.

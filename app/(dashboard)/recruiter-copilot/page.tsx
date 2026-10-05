@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ApprovalCard, type Approval, type ApprovalAnswer } from "./approval-card";
+import { runAgentJob } from "@/lib/agentJobClient";
 
 // ── Types ────────────────────────────────────────────────────────
 interface Slot { startsAt: string; durationMin?: number }
@@ -115,6 +116,8 @@ export default function RecruiterCopilotPage() {
   // A paused run waiting on the recruiter (human-in-the-loop gate).
   const [pending, setPending] = useState<Approval | null>(null);
   const [answering, setAnswering] = useState(false);
+  // Live step of the running turn ("Checking GitHub", "Finding interview slots", …)
+  const [step, setStep] = useState<string | null>(null);
 
   const [showContext, setShowContext] = useState(true);
   const [context, setContext] = useState<ContextForm>(EMPTY_CONTEXT);
@@ -169,13 +172,17 @@ export default function RecruiterCopilotPage() {
 
     const ctx = changedContext();
     try {
-      const res = await fetch("/api/recruiter-copilot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text.trim(), threadId: threadId ?? undefined, ...ctx }),
-      });
-      const data: CopilotResponse = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Copilot failed");
+      // The turn runs as a background job; poll it for live progress and the reply.
+      const job = await runAgentJob<CopilotResponse>(
+        () => fetch("/api/recruiter-copilot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text.trim(), threadId: threadId ?? undefined, ...ctx }),
+        }),
+        (label) => setStep(label),
+      );
+      if (job.status === "failed" || !job.result) throw new Error(job.error ?? "Copilot failed");
+      const data = job.result;
 
       sentContext.current = { ...sentContext.current, ...ctx };
       if (data.thread_id && data.thread_id !== threadId) {
@@ -195,6 +202,7 @@ export default function RecruiterCopilotPage() {
       setError(err instanceof Error ? err.message : "Copilot failed");
     } finally {
       setLoading(false);
+      setStep(null);
     }
   }
 
@@ -412,7 +420,7 @@ export default function RecruiterCopilotPage() {
             </div>
             <div className="rounded-2xl rounded-tl-sm border border-border bg-card px-5 py-4">
               <Loader2 className="h-4 w-4 animate-spin text-violet-400" />
-              <p className="text-xs text-muted-foreground mt-2">Routing to the right agent...</p>
+              <p className="text-xs text-muted-foreground mt-2">{step ? `${step}…` : "Routing to the right agent..."}</p>
             </div>
           </div>
         )}

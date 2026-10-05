@@ -109,6 +109,11 @@ async def open_checkpointer() -> BaseCheckpointSaver:
     return _checkpointer
 
 
+def get_pool():
+    """The Postgres connection pool (search_path = agent_memory), or None when in-memory."""
+    return _pool
+
+
 async def close_checkpointer() -> None:
     global _pool
     if _pool is not None:

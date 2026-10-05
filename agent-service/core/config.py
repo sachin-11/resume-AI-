@@ -18,6 +18,14 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     openai_api_key: Optional[str]
@@ -33,6 +41,11 @@ class Settings:
     llm_timeout_s: int
     llm_max_retries: int          # per-provider retries on 429 / 5xx / timeouts
     llm_structured_attempts: int  # re-asks when the reply fails schema validation
+    # Client-side request rate per provider (requests/second, 0 = unlimited). Keeps
+    # bursts under the provider's limit instead of turning them into 429s.
+    # Groq's free tier allows ~30 requests/minute for llama-3.3-70b.
+    openai_max_rps: float
+    groq_max_rps: float
 
     @property
     def providers(self) -> list[str]:
@@ -57,4 +70,6 @@ def get_settings() -> Settings:
         llm_timeout_s=_int_env("LLM_TIMEOUT_S", 60),
         llm_max_retries=_int_env("LLM_MAX_RETRIES", 2),
         llm_structured_attempts=max(1, _int_env("LLM_STRUCTURED_ATTEMPTS", 2)),
+        openai_max_rps=_float_env("OPENAI_MAX_RPS", 0),
+        groq_max_rps=_float_env("GROQ_MAX_RPS", 0.5),
     )

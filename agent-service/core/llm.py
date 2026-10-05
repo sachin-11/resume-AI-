@@ -5,6 +5,8 @@ What it adds over constructing ChatOpenAI/ChatGroq directly:
   - Per-call provider fallback: if the primary provider errors (after its own
     retries), the same request is retried on the next configured provider.
   - Retries with backoff on 429 / 5xx / timeouts, and a request timeout.
+  - A client-side rate limiter per provider (GROQ_MAX_RPS / OPENAI_MAX_RPS), so
+    bursts queue up locally instead of hitting the provider's limit.
   - Model tiers ("fast" for routing/judging, "reasoning" for generation).
   - Structured output: replies are parsed and validated against a Pydantic
     schema; an invalid reply is sent back to the model once with the error,
@@ -37,6 +39,17 @@ class NoLLMProviderError(RuntimeError):
     pass
 
 
+@lru_cache(maxsize=4)
+def _rate_limiter(provider: str):
+    """One limiter per provider, shared by every model instance (all tiers/temperatures)."""
+    rps = get_settings().openai_max_rps if provider == "openai" else get_settings().groq_max_rps
+    if rps <= 0:
+        return None
+    from langchain_core.rate_limiters import InMemoryRateLimiter
+    # Small burst allowance, then a steady `rps`.
+    return InMemoryRateLimiter(requests_per_second=rps, check_every_n_seconds=0.05, max_bucket_size=max(1, rps * 5))
+
+
 def _build_model(provider: str, tier: Tier, temperature: float) -> BaseChatModel:
     s = get_settings()
     if provider == "openai":
@@ -44,13 +57,13 @@ def _build_model(provider: str, tier: Tier, temperature: float) -> BaseChatModel
         model = s.openai_fast_model if tier == "fast" else s.openai_reasoning_model
         return ChatOpenAI(
             model=model, temperature=temperature, api_key=s.openai_api_key,
-            timeout=s.llm_timeout_s, max_retries=s.llm_max_retries,
+            timeout=s.llm_timeout_s, max_retries=s.llm_max_retries, rate_limiter=_rate_limiter("openai"),
         )
     from langchain_groq import ChatGroq
     model = s.groq_fast_model if tier == "fast" else s.groq_reasoning_model
     return ChatGroq(
         model=model, temperature=temperature, api_key=s.groq_api_key,
-        timeout=s.llm_timeout_s, max_retries=s.llm_max_retries,
+        timeout=s.llm_timeout_s, max_retries=s.llm_max_retries, rate_limiter=_rate_limiter("groq"),
     )
 
 

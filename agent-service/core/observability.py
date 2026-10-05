@@ -26,6 +26,9 @@ logger = logging.getLogger("agent.observability")
 
 # Set per request by the FastAPI middleware; read by logs and run configs.
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+# Set by the job runner while a background job runs: a callback that records
+# node-by-node progress for the job's status endpoint.
+progress_var: ContextVar[Optional[BaseCallbackHandler]] = ContextVar("progress", default=None)
 
 
 # ── Redaction ────────────────────────────────────────────────────
@@ -148,6 +151,8 @@ def run_config(
     if caller and not user_id:
         user_id = caller.user_id
     callbacks: list = [usage]
+    if progress_var.get() is not None:
+        callbacks.append(progress_var.get())
     handler = _langfuse_handler()
     if handler is not None:
         callbacks.append(handler)
