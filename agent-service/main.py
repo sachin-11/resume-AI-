@@ -627,6 +627,8 @@ async def run_auto_apply(
         "success": True,
         "usage": usage,
         "found_jobs": final_state.get("found_jobs", []),
+        "search_status": final_state.get("search_status", "ok"),
+        "search_message": final_state.get("search_message", ""),
         "tailored_resumes": final_state.get("tailored_resumes", []),
         "cover_letters": final_state.get("cover_letters", []),
         "logs": final_state.get("logs", []),

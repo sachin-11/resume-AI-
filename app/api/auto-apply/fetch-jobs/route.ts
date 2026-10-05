@@ -72,7 +72,13 @@ export async function POST(req: NextRequest) {
     const agentJobs = agentData.found_jobs ?? [];
 
     if (agentJobs.length === 0) {
-      return NextResponse.json({ found: 0, matched: 0, source: "mcp-agent" });
+      // Tell the user why (no search source configured / search failed / no matches)
+      // instead of a silent "0 jobs".
+      return NextResponse.json({
+        found: 0, matched: 0, skipped: 0,
+        source: agentData.search_status ?? "none",
+        message: agentData.search_message || "No new jobs found.",
+      });
     }
 
     // Save fetched jobs to Prisma PostgreSQL Database
@@ -96,7 +102,7 @@ export async function POST(req: NextRequest) {
           jobDescription: job.description?.slice(0, 5000) ?? "",
           salary: job.salary ?? "Not disclosed",
           jobType: job.jobType ?? "Full-time",
-          source: "mcp-agent",
+          source: job.source ?? "unknown",   // jsearch | brave-search
           externalId: job.jobUrl ?? String(Math.random()),
           matchScore: job.matchScore,
           matchedSkills: job.matchedSkills,
@@ -119,7 +125,7 @@ export async function POST(req: NextRequest) {
       found: results.length,
       matched,
       skipped: results.length - matched,
-      source: "mcp-agent",
+      source: "live",
       jobs: results.filter((r) => r && r.status === "found"),
     });
   } catch (err) {

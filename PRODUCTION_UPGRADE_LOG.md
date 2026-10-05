@@ -684,7 +684,7 @@ server exited cleanly: True
 | `@modelcontextprotocol/server-github` deprecated hai | GitHub ka official `github/github-mcp-server` hai. Migrate karna next step |
 | Allowlist self-declared hai | `call_tool(..., agent="faq")` caller khud batata hai. Code paths ke liye yeh policy + test ka kaam karta hai. Jab LLM khud tools chunega (`bind_tools`), tab registry se sirf allowed tools dena (`tools_for(agent)`) agla step |
 | Breaker per-process | Multiple replicas mein har replica ka apna breaker. Shared state (Redis) zaroori nahi lagi |
-| **Auto-apply fake jobs** (alag issue) | JSearch/Brave na ho to node **nakli job listings** ("TechVanguard Solutions", nakli URLs) bana deta hai, aur woh asli results ki tarah return hoti hain. Is module mein nahi chheda. **Fix karna chahiye** |
+| ~~**Auto-apply fake jobs**~~ | **Fix ho gaya**, neeche "Fix: Auto-apply data integrity" dekho |
 
 ---
 
@@ -696,3 +696,43 @@ server exited cleanly: True
 - *"Circuit breaker kyun?"* Dependency down ho to har request uska timeout khaati hai, aur threads/connections fill ho jaate hain. Breaker kuch failures ke baad turant fail karta hai aur fallback chalata hai.
 - *"MCP vs seedha API?"* MCP tools ko standard interface deta hai (koi bhi agent/LLM same protocol se tools discover aur call kar sake). Lekin har MCP server jo expose karta hai woh sab safe nahi hota. Isliye allowlist, aur simple read ke liye HTTP fallback.
 - *"Least privilege agents mein kaise?"* Har tool par allowed agents, aur LLM ko sirf wahi tools dikhte hain jo us agent ke liye allowed hain. Write/external actions approval ke peeche.
+
+---
+
+# Fix: Auto-apply data integrity (nakli jobs, hallucinated listings, guessed emails)
+
+## Problem
+
+| # | Kya ho raha tha | Asar |
+|---|---|---|
+| 1 | JSearch/Brave key na ho (ya fail ho) to agent **2 nakli jobs** bana deta tha ("TechVanguard Solutions", "Cognitive AI Systems", nakli LinkedIn/Indeed URLs, nakli salary) | `fetch-jobs` inhe **user ke job tracker (`AutoApplyJob`) mein asli jobs ki tarah save** karta tha. User nakli companies ke liye cover letter banata / apply karne ki koshish karta |
+| 2 | UI mein `source === "mock"` par "demo data" warning ka code tha, lekin backend hamesha `"mcp-agent"` bhejta tha | Warning **kabhi dikhi hi nahi** |
+| 3 | Brave fallback mein LLM search text se jobs nikalta tha, bina check ke | LLM company/URL **hallucinate** kar sakta tha, aur woh bhi asli job ban ke save hota |
+| 4 | Match prompt LLM ko kehta tha "HR email na mile to `recruitment@company.com` jaisa **suggest** karo", aur code fallback `careers@<company>.com` banata tha | Agent nakli email addresses return karta tha. (Check kiya: `fetch-jobs` yeh field save nahi karta, isliye abhi tak kisi guessed address par application nahi gayi. Lekin ek line ka change hi isse candidate ka resume kisi random domain par bhej deta) |
+| 5 | JSearch ka non-200 response chupchaap ignore | Error aur "0 results" mein fark nahi |
+
+## Fix
+| Jagah | Change |
+|---|---|
+| `agents/auto_apply/nodes.py` | **Mock fallback hataya.** Ab `search_status` (`ok` / `not_configured` / `failed`) + `search_message` (user ke liye reason) |
+| | Har job par `source` (`jsearch` / `brave-search`) |
+| | **Grounding check:** Brave se nikali job tabhi rakhi jaati hai jab uska `jobUrl` search results ke text mein **literally maujood** ho; baaki drop (log mein count) |
+| | **HR email:** prompt "never guess"; aur code mein sirf tab rakha jaata hai jab email **job description mein likha ho**, warna `null` |
+| `fetch-jobs/route.ts` | Asli `source` save hota hai; 0 results par reason (`message`) UI ko |
+| `auto-apply/page.tsx` | 0 results par **peela notice** reason ke saath (jaise "No job-search source is configured — set JSEARCH_API_KEY…"); dead "mock" check hataya |
+
+## Verification
+`tests/test_auto_apply.py`, 7 naye tests (total **66 passed**): koi source nahi → khaali + `not_configured`; search fail → `failed` (fake data nahi); JSearch jobs `source` ke saath; **Brave: invented company/URL drop, asli rakhi**; HR email: posting mein ho → rakha, guessed → `null`. `tsc` clean; ESLint mein sirf purane unused-import warnings.
+
+## Tumhe kya karna hai
+Production DB mein agar pehle ki nakli rows hain, to unhe hata do. Pehle count karke dekh lo:
+```sql
+SELECT count(*) FROM "AutoApplyJob"
+WHERE company IN ('TechVanguard Solutions', 'Cognitive AI Systems')
+  AND "jobUrl" IN ('https://linkedin.com/jobs/view/techvanguard-dev', 'https://indeed.com/view/cognitive-ai-lead');
+-- phir same WHERE ke saath DELETE
+```
+(Local DB mein 0 rows thi.)
+
+## Interview mein
+> "Ek audit mein mila ki auto-apply agent search source na hone par 'realistic' nakli jobs generate karta tha, aur woh user ke tracker mein asli jobs ki tarah save hoti thi. Maine principle rakha: **agent kabhi data fabricate nahi karega.** Source nahi hai to khaali result aur saaf reason. LLM se extract hui listings par grounding check lagaya: URL search results mein literally hona chahiye. Aur contact email sirf tab, jab woh posting mein likha ho. Dikhne mein 'demo friendly' fallback production mein trust todta hai."

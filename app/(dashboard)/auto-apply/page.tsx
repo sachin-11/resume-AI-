@@ -72,7 +72,7 @@ export default function AutoApplyPage() {
   });
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
-  const [fetchResult, setFetchResult] = useState<{ found: number; matched: number; skipped: number; source: string } | null>(null);
+  const [fetchResult, setFetchResult] = useState<{ found: number; matched: number; skipped: number; source: string; message?: string } | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -320,7 +320,14 @@ export default function AutoApplyPage() {
       )}
 
       {/* Fetch result banner */}
-      {fetchResult && (
+      {fetchResult && fetchResult.found === 0 && fetchResult.message && (
+        <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4 flex items-start gap-3">
+          <p className="flex-1 text-sm text-yellow-500">{fetchResult.message}</p>
+          <button onClick={() => setFetchResult(null)} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
+        </div>
+      )}
+
+      {fetchResult && !(fetchResult.found === 0 && fetchResult.message) && (
         <div className="rounded-xl border border-green-500/30 bg-green-500/10 p-4 flex items-start gap-3">
           <CheckCircle2 className="h-5 w-5 text-green-400 shrink-0 mt-0.5" />
           <div className="flex-1">
@@ -329,9 +336,6 @@ export default function AutoApplyPage() {
               {fetchResult.found} new jobs saved ·{" "}
               <span className="text-blue-400 font-medium">{fetchResult.matched} matched</span> ·{" "}
               {fetchResult.skipped ?? 0} below score threshold
-              {fetchResult.source === "mock" && (
-                <span className="ml-1 text-yellow-400">(demo data — add JSEARCH_API_KEY for real jobs)</span>
-              )}
             </p>
             {!settings.resumeId && (
               <p className="text-xs text-yellow-400 mt-1">

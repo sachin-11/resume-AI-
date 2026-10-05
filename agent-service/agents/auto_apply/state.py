@@ -13,7 +13,9 @@ class AutoApplyState(TypedDict):
     limit: int
 
     # Application state
-    found_jobs: List[dict]                  # [{jobTitle, company, location, jobUrl, matchScore, hrEmail}]
+    found_jobs: List[dict]                  # [{jobTitle, company, location, jobUrl, source, matchScore, hrEmail}]
+    search_status: str                      # ok | not_configured | failed
+    search_message: str                     # why nothing was found, for the UI
     tailored_resumes: List[dict]            # [{job_id, tailored_text}]
     cover_letters: List[dict]               # [{job_id, cover_letter_text}]
     

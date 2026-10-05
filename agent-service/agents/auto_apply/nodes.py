@@ -14,15 +14,20 @@ async def search_jobs_node(state: dict) -> dict:
 
     logs = [f"🔍 Starting job search for '{role}' in '{loc}' (limit: {limit})"]
     found_jobs = []
+    jsearch_key = os.getenv("JSEARCH_API_KEY")
+    jsearch_ready = bool(jsearch_key) and jsearch_key != "your_jsearch_api_key"
+    configured = jsearch_ready or bool(os.getenv("BRAVE_SEARCH_API_KEY"))
+    failed = False
 
     # 1. Try JSearch API (if API Key is configured)
-    jsearch_key = os.getenv("JSEARCH_API_KEY")
-    if jsearch_key and jsearch_key != "your_jsearch_api_key":
+    if jsearch_ready:
         try:
             logs.append("📡 Querying JSearch API for real-time listings...")
             found_jobs = await call_tool("jobs.jsearch", agent="auto_apply", query=f"{role} in {loc}", limit=limit)
+            found_jobs = [{**j, "source": "jsearch"} for j in found_jobs]
             logs.append(f"✅ JSearch found {len(found_jobs)} jobs successfully.")
         except Exception as e:
+            failed = True
             logs.append(f"⚠️ JSearch API query failed: {type(e).__name__}. Trying fallback...")
 
     # 2. Try Brave Search MCP fallback (if brave search key is set)
@@ -43,38 +48,38 @@ Search Results:
             response = await llm.ainvoke(parse_prompt)
             parsed = safe_json_parse(response.content if hasattr(response, 'content') else str(response), [])
             if isinstance(parsed, list):
-                found_jobs = parsed[:limit]
-                logs.append(f"✅ Scraped {len(found_jobs)} jobs via Brave Search MCP.")
+                # The LLM can invent a company or link; a listing only counts if its
+                # URL is literally in the search results it was extracted from.
+                grounded = [
+                    {**j, "source": "brave-search"} for j in parsed
+                    if isinstance(j, dict) and j.get("jobUrl") and j["jobUrl"] in text_content
+                ]
+                dropped = len(parsed) - len(grounded)
+                found_jobs = grounded[:limit]
+                logs.append(f"✅ Extracted {len(found_jobs)} jobs via Brave Search MCP"
+                            + (f" (dropped {dropped} not found in the search results)" if dropped else "") + ".")
         except Exception as e:
-            logs.append(f"⚠️ Brave Search MCP failed: {type(e).__name__}. Loading fallback mock listings...")
+            failed = True
+            logs.append(f"⚠️ Brave Search MCP failed: {type(e).__name__}.")
 
-    # 3. Dynamic Mock Fallback (so it ALWAYS works out-of-the-box with beautiful results)
-    if not found_jobs:
-        logs.append("ℹ️ No search API/MCP key configured. Generating highly realistic local listings for testing...")
-        found_jobs = [
-            {
-                "jobTitle": f"Senior {role}",
-                "company": "TechVanguard Solutions",
-                "location": loc,
-                "jobUrl": "https://linkedin.com/jobs/view/techvanguard-dev",
-                "salary": "₹15,00,000 - ₹22,00,000",
-                "jobType": "Full-time",
-                "description": f"We are hiring a Senior {role} skilled in React, Node.js, Python, and system architectures. 3+ years experience required."
-            },
-            {
-                "jobTitle": f"Lead {role} (Remote)",
-                "company": "Cognitive AI Systems",
-                "location": "Remote (India)",
-                "jobUrl": "https://indeed.com/view/cognitive-ai-lead",
-                "salary": "₹24,00,000 - ₹32,00,000",
-                "jobType": "Full-time",
-                "description": "Looking for a seasoned practitioner to lead our AI and Full-stack engineering squads. Expertise in Python, LLMs, next.js, and cloud platforms is mandatory."
-            }
-        ]
-        logs.append(f"✅ Generated {len(found_jobs)} matching mock job opportunities.")
+    # 3. Nothing found — say why. Never fabricate listings: they used to be saved
+    #    to the user's job tracker as if they were real openings.
+    if found_jobs:
+        status, message = "ok", ""
+    elif not configured:
+        status = "not_configured"
+        message = "No job-search source is configured — set JSEARCH_API_KEY (or BRAVE_SEARCH_API_KEY) to search live listings."
+    elif failed:
+        status, message = "failed", "Job search failed — please try again in a few minutes."
+    else:
+        status, message = "ok", f"No live listings matched '{role}' in '{loc}'."
+    if message:
+        logs.append(f"ℹ️ {message}")
 
     return {
         "found_jobs": found_jobs,
+        "search_status": status,
+        "search_message": message,
         "logs": logs
     }
 
@@ -96,7 +101,7 @@ async def match_and_score_node(state: dict) -> dict:
   "missingSkills": ["Docker", "AWS"],
   "hrEmail": "hr@company.com"
 }}
-(If no explicit HR email is in the job text, suggest a generic one like recruitment@company.com or return null)
+(hrEmail: only an email address written in the job text itself; otherwise null. Never guess one.)
 
 Job: {job.get('jobTitle')} at {job.get('company')}
 Description: {job.get('description', '')[:1000]}
@@ -109,6 +114,7 @@ Resume Sample:
             res = safe_json_parse(response.content if hasattr(response, 'content') else str(response), {})
             
             score = int(res.get("matchScore", 50))
+            hr_email = res.get("hrEmail") if isinstance(res.get("hrEmail"), str) else None
             
             # Enrich job structure
             scored_job = {
@@ -116,7 +122,8 @@ Resume Sample:
                 "matchScore": score,
                 "matchedSkills": res.get("matchedSkills", []),
                 "missingSkills": res.get("missingSkills", []),
-                "hrEmail": res.get("hrEmail") or f"careers@{job.get('company', 'company').lower().replace(' ', '')}.com",
+                # Applications get emailed to this address — keep it only if the posting really contains it.
+                "hrEmail": hr_email if hr_email and hr_email in job.get("description", "") else None,
                 "status": "found" if score >= min_score else "skipped"
             }
             scored_jobs.append(scored_job)
