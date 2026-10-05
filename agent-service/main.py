@@ -345,6 +345,8 @@ async def screen_candidate(
         "overall_rating": 0,
         "screening_decision": "maybe",
         "ai_fallback": False,
+        "injection_signals": [],
+        "protected_removed": [],
         "decision_reasons": [],
         "red_flags": [],
         "green_flags": [],

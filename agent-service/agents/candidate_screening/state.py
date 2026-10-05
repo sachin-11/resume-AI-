@@ -30,6 +30,9 @@ class CandidateScreeningState(TypedDict):
     screening_decision: str          # shortlist | maybe | reject
     decision_reasons: List[str]
     ai_fallback: bool                # match step fell back to a default (AI reply invalid)
+    injection_signals: List[str]     # prompt-injection patterns found in the resume
+    requirement_checks: List[dict]   # [{requirement, must_have, met, evidence}] behind the score
+    protected_removed: List[dict]    # model reasons dropped for citing a protected attribute
     red_flags: List[str]
     green_flags: List[str]
     screening_report: dict

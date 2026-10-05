@@ -57,3 +57,15 @@ def test_panel_surfaces_degraded_agents(fake_llm):
         "domain_verdict": {**ok, "domain_score": 80},
     })["panel_report"]
     assert report["degradedAgents"] == ["technical"]
+
+
+def test_screening_decision_follows_the_final_score():
+    from agents.candidate_screening.nodes import build_screening_report, decide
+
+    assert [decide(s) for s in (49, 50, 74, 75)] == ["reject", "maybe", "maybe", "shortlist"]
+    # GitHub-verified skills can lift a borderline score over the shortlist bar…
+    report = build_screening_report({"jd_match_score": 70, "github_skill_match": ["Python", "Go", "SQL"]})
+    assert (report["overall_rating"], report["screening_report"]["screeningDecision"]) == (76, "shortlist")
+    # …but a fallback (no real AI judgement) is never an automatic decision either way.
+    report = build_screening_report({"jd_match_score": 90, "ai_fallback": True})
+    assert report["screening_report"]["screeningDecision"] == "maybe"

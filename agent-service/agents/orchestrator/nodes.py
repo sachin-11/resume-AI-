@@ -192,6 +192,8 @@ async def run_resume_screener(state: dict) -> dict:
         "overall_rating": 0,
         "screening_decision": "maybe",
         "ai_fallback": False,
+        "injection_signals": [],
+        "protected_removed": [],
         "decision_reasons": [],
         "red_flags": [],
         "green_flags": [],
@@ -409,6 +411,12 @@ def _review_reasons(intent: str, result: dict) -> list[str]:
         report = result.get("report", {})
         if report.get("aiFallback"):
             reasons.append("Screening AI reply was invalid — decision is a default, not an AI judgement")
+        guard = report.get("guardrails") or {}
+        if guard.get("injectionSignals"):
+            reasons.append("Resume contains possible prompt-injection text "
+                           f"({', '.join(guard['injectionSignals'])}) — verify the decision manually")
+        if guard.get("protectedAttributeMentionsRemoved"):
+            reasons.append("The AI cited protected attributes (removed from the reasons) — review for bias")
         if report.get("screeningDecision") == "reject" and not report.get("humanReview"):
             reasons.append("Agent recommended reject — flagged for human confirmation")
         elif result.get("status") == "missing_input":

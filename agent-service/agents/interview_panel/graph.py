@@ -16,6 +16,10 @@ from langgraph.graph import START, StateGraph, END
 from typing import TypedDict, List, Literal, Optional, Annotated
 import operator
 from pydantic import BaseModel
+from core.guardrails import (
+    FAIRNESS_RULE, UNTRUSTED_NOTE, detect_injection, protected_attributes_in, redact_contact_info,
+    strip_protected, wrap_untrusted,
+)
 from core.llm import ainvoke_structured
 from core.types import Score, StrList
 
@@ -53,9 +57,17 @@ class DomainVerdict(BaseModel):
 
 
 async def _evaluate(prompt: str, schema, fallback, name: str) -> dict:
-    """Run one panelist; a fallback verdict is marked so consensus can surface it."""
+    """Run one panelist; a fallback verdict is marked so consensus can surface it,
+    and remarks citing protected attributes are removed (and recorded)."""
     result = await ainvoke_structured(prompt, schema, fallback=fallback, name=name)
-    return {**result.data.model_dump(), "ai_fallback": result.fallback_used}
+    verdict = result.data.model_dump()
+    verdict["strengths"], removed_s = strip_protected(verdict.get("strengths", []))
+    verdict["concerns"], removed_c = strip_protected(verdict.get("concerns", []))
+    removed = removed_s + removed_c
+    if protected_attributes_in(verdict.get("notes", "")):
+        removed.append({"text": verdict["notes"], "attributes": protected_attributes_in(verdict["notes"])})
+        verdict["notes"] = ""
+    return {**verdict, "ai_fallback": result.fallback_used, "protected_removed": removed}
 
 
 class PanelState(TypedDict):
@@ -100,11 +112,12 @@ Return ONLY valid JSON:
 
 verdict must be: "strong_pass" | "pass" | "borderline" | "fail"
 
-Q&A:
-{qa_text[:2000]}
+{FAIRNESS_RULE}
+{UNTRUSTED_NOTE}
 
-Resume:
-{state.get('resume_text', '')[:1000]}"""
+{wrap_untrusted("answers", qa_text[:2000])}
+
+{wrap_untrusted("resume", redact_contact_info(state.get('resume_text', ''))[:1000])}"""
 
     result = await _evaluate(prompt, TechnicalVerdict, TechnicalVerdict(technical_score=60, verdict="borderline"), "panel.technical")
 
@@ -136,8 +149,10 @@ Return ONLY valid JSON:
 
 verdict must be: "strong_pass" | "pass" | "borderline" | "fail"
 
-Q&A:
-{qa_text[:2000]}"""
+{FAIRNESS_RULE}
+{UNTRUSTED_NOTE}
+
+{wrap_untrusted("answers", qa_text[:2000])}"""
 
     result = await _evaluate(prompt, HRVerdict, HRVerdict(communication_score=65, verdict="borderline"), "panel.hr")
 
@@ -170,8 +185,10 @@ Return ONLY valid JSON:
 verdict must be: "strong_pass" | "pass" | "borderline" | "fail"
 
 Role: {state.get('role', 'Developer')}
-Q&A:
-{qa_text[:2000]}"""
+{FAIRNESS_RULE}
+{UNTRUSTED_NOTE}
+
+{wrap_untrusted("answers", qa_text[:2000])}"""
 
     result = await _evaluate(prompt, DomainVerdict, DomainVerdict(domain_score=65, verdict="borderline"), "panel.domain")
 
@@ -228,6 +245,14 @@ def panel_consensus(state: PanelState) -> dict:
             "domain": {"score": domain_score, "verdict": domain.get("verdict"), "strengths": domain.get("strengths", []), "concerns": domain.get("concerns", [])},
         },
         "panelNotes": notes,
+        "guardrails": {
+            "injectionSignals": sorted({
+                signal for qa in state.get("qa_pairs", []) for signal in detect_injection(str(qa.get("answer", "")))
+            }),
+            "protectedAttributeMentionsRemoved": [
+                r for v in (tech, hr, domain) for r in v.get("protected_removed", [])
+            ],
+        },
         "degradedAgents": degraded,
         "logs": state.get("logs", []),
     }
