@@ -35,6 +35,9 @@ THRESHOLDS = {
     "injection_flagged": 1.0,
     "fairness_same_decision": 1.0,
     "fairness_score_spread_ok": 1.0,
+    "faq_react_accuracy": 0.80,
+    "faq_react_unanswerable_grounded": 1.0,
+    "faq_classic_accuracy": 0.0,          # informational baseline, not gated
 }
 
 OUT = Path(__file__).resolve().parent
@@ -105,7 +108,55 @@ async def eval_fairness() -> tuple[dict, list]:
     }, rows
 
 
-SUITES = {"planner": eval_planner, "screening": eval_screening, "injection": eval_injection, "fairness": eval_fairness}
+_STOPWORDS = set("a an the is are am do does did i we our my to of in on for and or if can how what when "
+                 "there is it be with all any have has get some sometimes per year".split())
+
+
+def _keyword_search(query: str, top_k: int = 5) -> list[dict]:
+    """Strict lexical retriever: a doc matches if it contains at least half of the
+    query's content words. Deliberately weak to vocabulary mismatch."""
+    words = [w.strip("?.,'").lower() for w in query.split()]
+    words = [w for w in words if w and w not in _STOPWORDS]
+    hits = []
+    for doc in cases.FAQ_DOCS:
+        haystack = (doc["title"] + " " + doc["text"]).lower()
+        found = sum(w in haystack for w in words)
+        if words and found / len(words) >= 0.5:
+            hits.append({**doc, "score": found / len(words)})
+    return sorted(hits, key=lambda d: -d["score"])[:top_k]
+
+
+async def eval_faq() -> tuple[dict, list]:
+    import agents.faq.store as store
+    from agents.faq.graph import faq_agent, faq_agent_classic
+
+    store.retrieve_policy_chunks_sync = _keyword_search   # local corpus, never the real index
+    rows, react_ok, classic_ok, grounded = [], [], [], []
+    for question, fact, source in cases.FAQ:
+        results = {}
+        for name, graph in (("react", faq_agent), ("classic", faq_agent_classic)):
+            out = await graph.ainvoke({"question": question, "logs": []})
+            if fact is None:
+                ok = out["sources"] == []
+            else:
+                ok = fact.lower() in out["answer"].lower() and source in out["sources"]
+            results[name] = (ok, out)
+        searches = [line for line in results["react"][1]["logs"] if line.startswith("🔎")]
+        (react_ok if fact else grounded).append(results["react"][0])
+        if fact:
+            classic_ok.append(results["classic"][0])
+        rows.append({"case": question, "expected": fact or "not covered → no sources",
+                     "got": f"react={'✓' if results['react'][0] else '✗'} classic={'✓' if results['classic'][0] else '✗'} "
+                            f"| {searches[0][2:] if searches else ''}",
+                     "ok": results["react"][0]})
+    return {
+        "faq_react_accuracy": sum(react_ok) / len(react_ok),
+        "faq_react_unanswerable_grounded": sum(grounded) / len(grounded),
+        "faq_classic_accuracy": sum(classic_ok) / len(classic_ok),
+    }, rows
+
+
+SUITES = {"planner": eval_planner, "screening": eval_screening, "injection": eval_injection, "fairness": eval_fairness, "faq": eval_faq}
 
 
 def write_report(metrics: dict, details: dict, seconds: float) -> bool:

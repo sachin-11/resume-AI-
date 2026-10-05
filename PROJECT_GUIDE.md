@@ -118,6 +118,7 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 |---|---|---|
 | **AI Agent** | LLM + tools + steps. Sirf jawab nahi deta, kaam karta hai | Screening agent: resume padhta hai → GitHub check karta hai → score deta hai |
 | **LangGraph** | Agent ka **flowchart** — kaunsa step, kiske baad, kab loop, kab ruke | Har agent ek graph hai |
+| **ReAct** | AI khud socho → tool chalao → result dekho → phir socho. Agla step pehle se fix nahi | **FAQ agent**: policy search karta hai, result kaam ka na ho to doosre shabdon se dobara search (max 3). Hiring decisions mein ReAct **nahi** — wahan fixed flow |
 | **Supervisor pattern** | **Manager + team.** Manager kaam baant-ta hai, team karti hai | Planner + supervisor = manager; screening, scheduling, FAQ = team |
 | **Parallel agents** | Teen judges ek saath number dete hain, ek ke baad ek nahi | 3 AI interviewers parallel → ~3x tez |
 | **Conflict resolution** | Judges alag bolein to kya? | Weighted score (Technical 50%, HR 25%, Domain 25%) + majority vote; barabar ho to "hold" → insaan decide kare |
@@ -145,6 +146,7 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 | 7 | **AI agents 1–2 minute lete the, request timeout ho jaati** | **Job queue:** request turant job ID deti hai, kaam background mein, screen par live progress |
 | 8 | **Auto-apply nakli jobs bana deta tha** (jab job API key nahi hoti) | Nakli data band. Source nahi hai to saaf message: "job search configured nahi hai" |
 | 9 | **GitHub check kabhi chala hi nahi** (galat tool naam + expired token) | Sahi tool, connection reuse (4.5s → 0.1s), aur token kharab ho to bina token try |
+| 10 | **FAQ sirf user ke exact shabdon se search karta tha** — "vacation" puchho, doc mein "leave" likha ho to jawab nahi milta | FAQ ko **ReAct** banaya: AI search query khud behtar likhta hai, zarurat ho to dobara search. Accuracy **40% → 100%**. Library step-limit par chupchaap "Sorry, need more steps" ko answer bana deti thi — woh bhi pakda aur roka |
 
 > 🎤 **Aise bolo:** "Maine har feature ko asli data par test kiya, aur kai chhupe bugs pakde — jaise same score par alag decision (bias), slot double-booking, aur fake job listings. Har ek ka ab automated test hai."
 
@@ -162,12 +164,13 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 
 ## 9. Quality kaise ensure ki (testing)
 
-1. **100 automatic tests** — fake AI ke saath, har PR par chalte hain (GitHub Actions). Free, fast.
+1. **105 automatic tests** — fake AI ke saath, har PR par chalte hain (GitHub Actions). Free, fast.
 2. **Evals (asli AI ke saath test):** 4 cheezein check hoti hain:
    - Planner sahi steps banata hai? (16 examples)
    - Screening sahi decision deta hai? (5 clear cases)
    - Trick karne wale resumes fail hote hain? (3 attacks)
    - **Fairness:** same resume, alag naam/gender/age → same decision?
+   - **FAQ:** ReAct vs simple search — kaun zyada sahi jawab deta hai?
    Sab **100%** pass. Score gire to CI fail.
 3. **Monitoring (Langfuse):** har AI call ka time, cost, steps dikhte hain.
 
@@ -208,6 +211,9 @@ Recruitment Copilot — multi-step plan, memory, beech mein ruk ke approval lena
 **Q: LangGraph kyun?**
 Isme flowchart jaisa control milta hai — steps, loops, beech mein rukna (approval), aur state save karna. Hiring jaise sensitive kaam mein predictable flow chahiye tha.
 
+**Q: ReAct pattern use kiya?**
+Haan, FAQ agent mein — wahan agla step data dekh ke pata chalta hai (search ka result achha nahi to dobara search). Hiring decisions (screening, reject, booking) mein jaan-boojh ke nahi, kyunki wahan predictable aur auditable flow chahiye. ReAct ko sirf allowlisted, read-only tool milta hai, max 3 searches, aur bina document ke answer allowed nahi. Eval: ReAct 100% vs single-search 40%.
+
 **Q: Agent infinite loop mein na jaaye, kaise?**
 Har loop ki limit hai (max 3), plan max 3 steps, aur counter code mein hai — AI ke haath mein nahi.
 
@@ -239,4 +245,4 @@ Purana data auto-delete (privacy), baaki lambe features ko bhi job queue par lan
 4. **Ek-do problem + solution** (section 7) — bias wala aur double-booking wala sabse strong hain
 5. Sawaal aaye to **section 6 aur 11**
 
-**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 10 AI agents · 100 tests · evals 100% pass · GitHub check 4.5s → 0.1s · double-booking 10 → 1
+**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 10 AI agents · 105 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1

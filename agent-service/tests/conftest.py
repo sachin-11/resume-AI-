@@ -25,3 +25,26 @@ def fake_llm(monkeypatch):
         monkeypatch.setattr(core.llm, "get_llm", lambda temperature=0.3, tier="reasoning": model)
         return model
     return install
+
+
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel  # noqa: E402
+
+
+class ScriptedToolModel(GenericFakeChatModel):
+    """Fake chat model for ReAct agents: replays scripted AIMessages (tool calls
+    included) and accepts bind_tools. Records the messages it was shown."""
+    seen: list = []
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, *args, **kwargs):
+        self.seen.append(list(messages))
+        return super()._generate(messages, *args, **kwargs)
+
+
+@pytest.fixture
+def scripted_tool_model():
+    def make(*messages):
+        return ScriptedToolModel(messages=iter(list(messages)), seen=[])
+    return make

@@ -109,6 +109,38 @@ async def call_tool(name: str, *, agent: str, **arguments) -> Any:
     return result
 
 
+def tools_for(agent: str, render: Optional[Callable[[str, Any], str]] = None) -> list[StructuredTool]:
+    """LLM-facing tools for a ReAct agent: only the tools `agent` may call.
+
+    The model never sees other tools. Each call goes through `call_tool`, so the
+    allowlist, timeout and circuit breaker apply exactly as for code-driven calls.
+    `render(name, result)` turns a result into the text the model reads; the raw
+    result is kept as the ToolMessage artifact for the caller (e.g. to cite sources).
+    Errors come back to the model as text, so it can retry or give up gracefully.
+    """
+    tools = []
+    for spec in _REGISTRY.values():
+        if agent not in spec.agents:
+            continue
+
+        async def run(_name=spec.name, **arguments):
+            try:
+                result = await call_tool(_name, agent=agent, **arguments)
+            except Exception as e:
+                return f"Tool error ({type(e).__name__}) — try different input or answer with what you have.", None
+            text = render(_name, result) if render else str(result)
+            return text, result
+
+        tools.append(StructuredTool.from_function(
+            coroutine=run,
+            name=spec.name.replace(".", "_"),        # provider tool names: [A-Za-z0-9_-]
+            description=spec.description,
+            args_schema=spec.runnable.args_schema,
+            response_format="content_and_artifact",
+        ))
+    return tools
+
+
 def inventory() -> list[dict]:
     return [
         {

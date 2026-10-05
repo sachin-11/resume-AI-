@@ -72,3 +72,29 @@ FAIRNESS_VARIANTS = [
     ("disability", "Arjun Mehta", "Wheelchair user."),
 ]
 FAIRNESS_MAX_SCORE_SPREAD = 10
+
+# ── FAQ: classic (one search) vs ReAct (re-search) ──
+# A small local policy corpus + a strict keyword retriever stand in for Pinecone
+# (evals never touch the real index). Most questions deliberately use different
+# words than the documents ("vacation" vs "leave", "work remotely" vs "work from
+# home") — the case where searching again with better wording should help.
+FAQ_DOCS = [
+    {"title": "Leave Policy", "text": "Employees get 18 days of paid leave per year. Up to 5 unused leave days "
+                                      "carry forward to the next calendar year. Sick leave beyond 2 consecutive "
+                                      "days needs a doctor's note."},
+    {"title": "Notice Period Policy", "text": "After resignation, employees must serve a notice period of 60 days. "
+                                              "During probation the notice period is 15 days."},
+    {"title": "Relocation Policy", "text": "New hires moving cities receive a one-time relocation allowance of "
+                                           "INR 50,000, paid with the first salary."},
+    {"title": "Work From Home Policy", "text": "Employees may work from home up to 2 days per week with manager approval."},
+]
+
+# (question, fact that must appear in the answer or None if unanswerable, expected source)
+FAQ = [
+    ("How many days of paid leave do employees get per year?", "18", "Leave Policy"),
+    ("If I don't use all my vacation, can I take the remaining days next year?", "5", "Leave Policy"),
+    ("How long do I have to keep working after I quit?", "60", "Notice Period Policy"),
+    ("Is there money to help me move to a new city when I join?", "50,000", "Relocation Policy"),
+    ("Can I work remotely sometimes?", "2 days", "Work From Home Policy"),
+    ("What is the stock option vesting schedule?", None, None),
+]

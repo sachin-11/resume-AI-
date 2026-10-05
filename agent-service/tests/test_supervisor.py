@@ -106,13 +106,13 @@ def test_recruiter_override_unlocks_the_conditional_step(copilot):
     assert done["steps"][0]["result"]["report"]["humanReview"]["decision"] == "shortlist"
 
 
-def test_two_independent_steps_in_one_turn(copilot, monkeypatch):
+def test_two_independent_steps_in_one_turn(copilot, monkeypatch, scripted_tool_model):
+    from langchain_core.messages import AIMessage
     client, script = copilot
 
-    async def no_docs(name, *, agent, **kwargs):
-        return []
-
-    monkeypatch.setattr(faq_nodes, "call_tool", no_docs)
+    # FAQ (ReAct): the model answers without searching → grounded fallback, flagged
+    faq_model = scripted_tool_model(AIMessage(content="Probably 30 days."))
+    monkeypatch.setattr(faq_nodes, "get_llm", lambda temperature=0.3, tier="reasoning": faq_model)
     script(json.dumps({"steps": [{"intent": "scheduling"}, {"intent": "faq"}]}), "Hi Asha, here are some times.")
     body = ask(client, "Propose slots for Asha, and what's our notice period policy?")
 
