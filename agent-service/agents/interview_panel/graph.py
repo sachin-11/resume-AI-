@@ -13,9 +13,49 @@ Then consensus score is generated.
           [domain_eval]     ─┘
 """
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Optional, Annotated
+from typing import TypedDict, List, Literal, Optional, Annotated
 import operator
-from agents.shared.llm import get_llm, safe_json_parse
+from pydantic import BaseModel
+from core.llm import ainvoke_structured
+from core.types import Score, StrList
+
+Verdict = Literal["strong_pass", "pass", "borderline", "fail"]
+
+
+class TechnicalVerdict(BaseModel):
+    technical_score: Score
+    code_quality_assessment: str = ""
+    system_design_score: Optional[Score] = None
+    strengths: StrList = []
+    concerns: StrList = []
+    verdict: Verdict
+    notes: str = ""
+
+
+class HRVerdict(BaseModel):
+    communication_score: Score
+    culture_fit_score: Optional[Score] = None
+    behavioral_score: Optional[Score] = None
+    strengths: StrList = []
+    concerns: StrList = []
+    verdict: Verdict
+    notes: str = ""
+
+
+class DomainVerdict(BaseModel):
+    domain_score: Score
+    industry_knowledge: str = ""
+    role_fit_score: Optional[Score] = None
+    strengths: StrList = []
+    concerns: StrList = []
+    verdict: Verdict
+    notes: str = ""
+
+
+async def _evaluate(prompt: str, schema, fallback, name: str) -> dict:
+    """Run one panelist; a fallback verdict is marked so consensus can surface it."""
+    result = await ainvoke_structured(prompt, schema, fallback=fallback, name=name)
+    return {**result.data.model_dump(), "ai_fallback": result.fallback_used}
 
 
 class PanelState(TypedDict):
@@ -40,7 +80,6 @@ class PanelState(TypedDict):
 
 async def technical_agent_eval(state: PanelState) -> dict:
     """Technical Agent: Evaluates coding, system design, technical depth."""
-    llm = get_llm()
     qa_text = "\n".join([
         f"Q: {qa.get('question', '')}\nA: {qa.get('answer', '')}"
         for qa in state.get("qa_pairs", [])[:5]
@@ -67,11 +106,7 @@ Q&A:
 Resume:
 {state.get('resume_text', '')[:1000]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, 'content') else str(response),
-        {"technical_score": 60, "verdict": "borderline", "strengths": [], "concerns": [], "notes": ""}
-    )
+    result = await _evaluate(prompt, TechnicalVerdict, TechnicalVerdict(technical_score=60, verdict="borderline"), "panel.technical")
 
     return {
         "technical_verdict": result,
@@ -81,7 +116,6 @@ Resume:
 
 async def hr_agent_eval(state: PanelState) -> dict:
     """HR Agent: Evaluates communication, culture fit, behavioral."""
-    llm = get_llm()
     qa_text = "\n".join([
         f"Q: {qa.get('question', '')}\nA: {qa.get('answer', '')}"
         for qa in state.get("qa_pairs", [])[:5]
@@ -105,11 +139,7 @@ verdict must be: "strong_pass" | "pass" | "borderline" | "fail"
 Q&A:
 {qa_text[:2000]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, 'content') else str(response),
-        {"communication_score": 65, "verdict": "borderline", "strengths": [], "concerns": [], "notes": ""}
-    )
+    result = await _evaluate(prompt, HRVerdict, HRVerdict(communication_score=65, verdict="borderline"), "panel.hr")
 
     return {
         "hr_verdict": result,
@@ -119,7 +149,6 @@ Q&A:
 
 async def domain_expert_eval(state: PanelState) -> dict:
     """Domain Expert: Evaluates role-specific knowledge."""
-    llm = get_llm()
     qa_text = "\n".join([
         f"Q: {qa.get('question', '')}\nA: {qa.get('answer', '')}"
         for qa in state.get("qa_pairs", [])[:5]
@@ -144,11 +173,7 @@ Role: {state.get('role', 'Developer')}
 Q&A:
 {qa_text[:2000]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, 'content') else str(response),
-        {"domain_score": 65, "verdict": "borderline", "strengths": [], "concerns": [], "notes": ""}
-    )
+    result = await _evaluate(prompt, DomainVerdict, DomainVerdict(domain_score=65, verdict="borderline"), "panel.domain")
 
     return {
         "domain_verdict": result,
@@ -184,7 +209,11 @@ def panel_consensus(state: PanelState) -> dict:
     else:
         recommendation = "hold"
 
+    degraded = [name for name, v in (("technical", tech), ("hr", hr), ("domain", domain)) if v.get("ai_fallback")]
+
     notes = []
+    if degraded:
+        notes.append(f"⚠️ Default (non-AI) verdict used for: {', '.join(degraded)} — review before deciding")
     if tech.get("notes"): notes.append(f"Technical: {tech['notes']}")
     if hr.get("notes"): notes.append(f"HR: {hr['notes']}")
     if domain.get("notes"): notes.append(f"Domain: {domain['notes']}")
@@ -199,6 +228,7 @@ def panel_consensus(state: PanelState) -> dict:
             "domain": {"score": domain_score, "verdict": domain.get("verdict"), "strengths": domain.get("strengths", []), "concerns": domain.get("concerns", [])},
         },
         "panelNotes": notes,
+        "degradedAgents": degraded,
         "logs": state.get("logs", []),
     }
 

@@ -2,14 +2,35 @@
 Candidate Screening Agent — Nodes
 """
 import re
+from typing import Literal, Optional
+
 import httpx
-from agents.shared.llm import get_llm, safe_json_parse
+from pydantic import BaseModel
+
+from core.llm import ainvoke_structured
+from core.types import Score, StrList
+
+
+class CandidateInfo(BaseModel):
+    skills: StrList = []
+    github_username: Optional[str] = None
+    years_experience: Optional[float] = None
+    current_role: Optional[str] = None
+    education: Optional[str] = None
+
+
+class JDMatch(BaseModel):
+    match_score: Score
+    matched_skills: StrList = []
+    missing_skills: StrList = []
+    red_flags: StrList = []
+    green_flags: StrList = []
+    screening_decision: Literal["shortlist", "maybe", "reject"]
+    decision_reasons: StrList = []
 
 
 async def extract_candidate_info(state: dict) -> dict:
     """Node 1: Extract skills and GitHub username from resume."""
-    llm = get_llm()
-
     prompt = f"""Extract information from this resume. Return ONLY valid JSON:
 {{
   "skills": ["React", "Node.js", "PostgreSQL"],
@@ -24,18 +45,19 @@ github_username: extract from GitHub URL if present, else null
 Resume:
 {state.get('resume_text', '')[:2500]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, 'content') else str(response),
-        {"skills": [], "github_username": None, "years_experience": 0}
+    result = await ainvoke_structured(
+        prompt, CandidateInfo, fallback=CandidateInfo(),
+        temperature=0, name="screening.extract_info",
     )
-
-    github = result.get("github_username") or state.get("github_username")
+    info = result.data
+    github = info.github_username if info.github_username not in (None, "", "null") else None
+    github = github or state.get("github_username")
+    note = " (⚠️ extraction reply invalid — no skills extracted)" if result.fallback_used else ""
 
     return {
-        "extracted_skills": result.get("skills", []),
+        "extracted_skills": info.skills,
         "extracted_github": github,
-        "logs": [f"✅ Extracted {len(result.get('skills', []))} skills. GitHub: {github or 'not found'}"]
+        "logs": [f"✅ Extracted {len(info.skills)} skills. GitHub: {github or 'not found'}{note}"]
     }
 
 
@@ -159,7 +181,6 @@ async def fetch_github_data(state: dict) -> dict:
 
 async def match_against_jd(state: dict) -> dict:
     """Node 3: Match candidate profile against JD."""
-    llm = get_llm()
 
     github_context = ""
     if state.get("github_repos"):
@@ -189,25 +210,27 @@ Job Description:
 Resume:
 {state.get('resume_text', '')[:1500]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, 'content') else str(response),
-        {
-            "match_score": 50, "matched_skills": [], "missing_skills": [],
-            "red_flags": [], "green_flags": [],
-            "screening_decision": "maybe", "decision_reasons": []
-        }
+    result = await ainvoke_structured(
+        prompt,
+        JDMatch,
+        fallback=JDMatch(match_score=50, screening_decision="maybe",
+                         decision_reasons=["AI match reply was invalid — default score, needs manual review"]),
+        temperature=0,
+        name="screening.match_jd",
     )
+    m = result.data
+    note = " (⚠️ AI reply invalid — default used)" if result.fallback_used else ""
 
     return {
-        "jd_match_score": int(result.get("match_score", 50)),
-        "matched_skills": result.get("matched_skills", []),
-        "missing_skills": result.get("missing_skills", []),
-        "red_flags": result.get("red_flags", []),
-        "green_flags": result.get("green_flags", []),
-        "screening_decision": result.get("screening_decision", "maybe"),
-        "decision_reasons": result.get("decision_reasons", []),
-        "logs": [f"📊 JD Match: {result.get('match_score', 50)}% | Decision: {result.get('screening_decision', 'maybe')}"]
+        "jd_match_score": m.match_score,
+        "matched_skills": m.matched_skills,
+        "missing_skills": m.missing_skills,
+        "red_flags": m.red_flags,
+        "green_flags": m.green_flags,
+        "screening_decision": m.screening_decision,
+        "decision_reasons": m.decision_reasons,
+        "ai_fallback": result.fallback_used,
+        "logs": [f"📊 JD Match: {m.match_score}% | Decision: {m.screening_decision}{note}"]
     }
 
 
@@ -234,6 +257,7 @@ def build_screening_report(state: dict) -> dict:
         "githubRepos": state.get("github_repos", [])[:5],
         "githubVerifiedSkills": state.get("github_skill_match", []),
         "githubBoost": github_boost,
+        "aiFallback": state.get("ai_fallback", False),
         "logs": state.get("logs", []),
     }
 

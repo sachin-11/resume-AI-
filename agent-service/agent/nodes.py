@@ -5,43 +5,18 @@ Each function = one node in the LangGraph graph.
 Nodes receive the current state, do work, return updated state fields.
 """
 
-import json
-import os
-from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
-from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from agent.state import ResumeImprovementState
+from agents.shared.llm import get_llm, safe_json_parse
+from core.llm import invoke_structured
+from core.types import Score
 
 
-# ── LLM Setup (OpenAI primary, Groq fallback) ───────────────────
-def get_llm(temperature: float = 0.3) -> Any:
-    """Get LLM — OpenAI if key available, else Groq."""
-    if os.getenv("OPENAI_API_KEY"):
-        return ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=temperature,
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
-    return ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=temperature,
-        api_key=os.getenv("GROQ_API_KEY"),
-    )
-
-
-def safe_json_parse(text: str, fallback: Any) -> Any:
-    """Parse JSON from LLM response, handling markdown code blocks."""
-    try:
-        # Strip markdown code blocks if present
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
-    except Exception:
-        return fallback
+class ScoreCheckOutput(BaseModel):
+    new_score: Score
+    improvement_reason: str = ""
 
 
 # ── Node 1: Analyze Resume ───────────────────────────────────────
@@ -223,8 +198,6 @@ def score_check(state: ResumeImprovementState) -> dict:
     Node 4: Re-score the resume after rewrites.
     This determines if we loop back or proceed to finalize.
     """
-    llm = get_llm()
-
     # Build improved resume text for re-scoring
     improved_text = state['resume_text']
     if state.get("improved_summary"):
@@ -242,17 +215,26 @@ Keywords added: {state.get('keywords_added', [])}
 Improved Resume:
 {improved_text[:2500]}"""
 
-    response = llm.invoke([
-        SystemMessage(content="You are an ATS scoring system. Return only valid JSON."),
-        HumanMessage(content=prompt)
-    ])
-
-    result = safe_json_parse(response.content, {"new_score": state["current_score"] + 5})
-    new_score = int(result.get("new_score", state["current_score"] + 5))
+    # Fallback keeps the score unchanged. It used to be `current_score + 5`, which
+    # reported a fake improvement whenever the scorer's reply was unparseable.
+    # The loop still terminates via max_iterations.
+    result = invoke_structured(
+        [
+            SystemMessage(content="You are an ATS scoring system. Return only valid JSON."),
+            HumanMessage(content=prompt),
+        ],
+        ScoreCheckOutput,
+        fallback=ScoreCheckOutput(new_score=state["current_score"], improvement_reason="Scoring failed"),
+        tier="fast",
+        temperature=0,
+        name="resume.score_check",
+    )
+    new_score = result.data.new_score
+    note = " (⚠️ scorer reply invalid — score unchanged)" if result.fallback_used else ""
 
     return {
         "current_score": new_score,
-        "logs": [f"📊 Score check iteration {state.get('iteration', 1)}: {state['current_score']} → {new_score}/100"]
+        "logs": [f"📊 Score check iteration {state.get('iteration', 1)}: {state['current_score']} → {new_score}/100{note}"]
     }
 
 

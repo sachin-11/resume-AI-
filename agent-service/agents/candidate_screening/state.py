@@ -29,6 +29,7 @@ class CandidateScreeningState(TypedDict):
     overall_rating: int              # 0-100
     screening_decision: str          # shortlist | maybe | reject
     decision_reasons: List[str]
+    ai_fallback: bool                # match step fell back to a default (AI reply invalid)
     red_flags: List[str]
     green_flags: List[str]
     screening_report: dict

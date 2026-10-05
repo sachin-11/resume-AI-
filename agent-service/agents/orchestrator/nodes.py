@@ -1,18 +1,25 @@
 """
 Recruitment Copilot Orchestrator — Nodes
 """
-from agents.shared.llm import get_llm, safe_json_parse
+from typing import Literal
+
+from pydantic import BaseModel
+
+from agents.shared.llm import get_llm
 from agents.shared.observability import trace_guardrail
 from agents.candidate_screening.graph import candidate_screening_agent
 from agents.scheduler.graph import scheduler_agent
 from agents.faq.graph import faq_agent
+from core.llm import ainvoke_structured
 
-VALID_INTENTS = {"resume_screening", "scheduling", "faq", "other"}
+
+class IntentOutput(BaseModel):
+    intent: Literal["resume_screening", "scheduling", "faq", "other"]
+    reasoning: str = ""
 
 
 async def classify_intent(state: dict) -> dict:
     """Node 1: Classify the user's message into a routable intent."""
-    llm = get_llm(temperature=0)
     message = state.get("user_message", "")
 
     prompt = f"""Classify this recruiter/candidate message into exactly one intent. Return ONLY valid JSON:
@@ -30,20 +37,20 @@ intent must be one of:
 Message:
 {message[:1500]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, "content") else str(response),
-        {"intent": "other", "reasoning": "Could not classify — defaulting to general handler"},
+    result = await ainvoke_structured(
+        prompt,
+        IntentOutput,
+        fallback=IntentOutput(intent="other", reasoning="Could not classify — defaulting to general handler"),
+        tier="fast",
+        temperature=0,
+        name="orchestrator.classify_intent",
     )
-
-    intent = result.get("intent", "other")
-    if intent not in VALID_INTENTS:
-        intent = "other"
+    intent, reasoning = result.data.intent, result.data.reasoning
 
     return {
         "intent": intent,
-        "intent_reasoning": result.get("reasoning", ""),
-        "logs": [f"🧭 Classified intent: '{intent}' — {result.get('reasoning', '')}"],
+        "intent_reasoning": reasoning,
+        "logs": [f"🧭 Classified intent: '{intent}' — {reasoning}"],
     }
 
 
@@ -76,6 +83,7 @@ async def run_resume_screener(state: dict) -> dict:
         "missing_skills": [],
         "overall_rating": 0,
         "screening_decision": "maybe",
+        "ai_fallback": False,
         "decision_reasons": [],
         "red_flags": [],
         "green_flags": [],
@@ -181,7 +189,11 @@ def finalize(state: dict) -> dict:
     reasons = []
 
     if intent == "resume_screening":
-        decision = result.get("report", {}).get("screeningDecision")
+        report = result.get("report", {})
+        decision = report.get("screeningDecision")
+        if report.get("aiFallback"):
+            needs_review = True
+            reasons.append("Screening AI reply was invalid — decision is a default, not an AI judgement")
         if decision == "reject":
             needs_review = True
             reasons.append("Agent recommended reject — flagged for human confirmation")

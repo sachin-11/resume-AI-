@@ -190,7 +190,7 @@ workflow.add_edge(["technical_eval", "hr_eval", "domain_eval"], "consensus")  # 
 2. **Hard cap**: `iteration >= max_iterations` (default 3) ho to `finalize`. Counter `rewrite_sections` mein badhta hai (`iteration = state.get("iteration", 0) + 1`), yaani counter state mein hai, LLM ke haath mein nahi
 3. **Framework brake**: LangGraph ka default `recursion_limit` (25 supersteps) ke baad `GraphRecursionError`
 4. **Wall-clock timeout**: Next.js side `AbortSignal.timeout(120_000)` (`app/api/agents/*/route.ts`); MCP calls par 30s (`mcp_client.py`)
-5. **Parse-fail safety**: `safe_json_parse` fallback deta hai. `score_check` mein fallback `current_score + 5` hai, isliye garbage output par bhi score badhta rehta hai aur loop converge karta hai
+5. **Parse-fail safety**: `score_check` Pydantic schema (`new_score` 0–100) se validate hota hai. Reply invalid ho to score **unchanged** rehta hai (pehle `+5` ka fake improvement hota tha), aur loop `max_iterations` se band ho jaata hai
 
 **Interview mein bolo**
 > "Loop ka exit condition maine LLM ke text par depend nahi rakha. Iteration counter state mein hai aur code check karta hai. Do conditions hain: quality threshold ya max iterations, jo pehle hit ho. Upar se framework recursion limit aur HTTP timeout bhi hain, defense in depth."
@@ -267,7 +267,7 @@ workflow.add_edge(["technical_eval", "hr_eval", "domain_eval"], "consensus")  # 
 | Layer | Kya kiya | Kahan |
 |---|---|---|
 | **Service auth** | Har endpoint par `x-agent-secret`, `secrets.compare_digest` (timing-safe). Secret unset ho to request fail hoti hai, koi insecure default nahi | `main.py → verify_secret`, `app/api/agents/*` |
-| **Output allowlist** | LLM ka intent `VALID_INTENTS` mein nahi hai to `other` | `orchestrator/nodes.py` |
+| **Output schema (Pydantic)** | Intent `Literal[...]` schema se validate hota hai; galat value aaye to LLM ko error ke saath ek baar dobara poocha jaata hai, phir bhi galat ho to `other` | `core/llm.py → ainvoke_structured`, `orchestrator/nodes.py` |
 | **Structured output + fallback** | Har LLM call JSON maangti hai; parse fail ho to safe default (`maybe`, `borderline`) | `shared/llm.py → safe_json_parse` |
 | **LLM ko DB ka direct access nahi** | DB-Chat mein LLM sirf **query plan (JSON)** banata hai; code fixed Prisma queries chalata hai, `userId` hamesha forced, `limit` max 50. Raw SQL nahi, cross-tenant read nahi | `lib/db-chat.ts → executeQuery` |
 | **Hallucination guardrail** | RAG answer ka faithfulness score; < 0.5 → human review | `shared/eval.py`, `faq/nodes.py` |

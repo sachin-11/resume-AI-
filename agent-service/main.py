@@ -7,6 +7,7 @@ Endpoints:
   GET  /graph-info       → Show graph structure (for debugging)
 """
 
+import logging
 import os
 import secrets
 from typing import Optional
@@ -16,6 +17,11 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 from agent import resume_agent, ResumeImprovementState
 
@@ -282,6 +288,7 @@ async def screen_candidate(
         "missing_skills": [],
         "overall_rating": 0,
         "screening_decision": "maybe",
+        "ai_fallback": False,
         "decision_reasons": [],
         "red_flags": [],
         "green_flags": [],

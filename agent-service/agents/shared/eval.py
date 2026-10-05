@@ -6,7 +6,16 @@ as a single structured LLM call, instead of pulling in the full `ragas` package
 (heavy deps: datasets, sentence-transformers, etc). Good enough to gate a guardrail;
 swap for real `ragas` if you need publication-grade eval numbers.
 """
-from agents.shared.llm import get_llm, safe_json_parse
+from pydantic import BaseModel
+
+from core.llm import ainvoke_structured
+from core.types import UnitScore
+
+
+class RagScores(BaseModel):
+    faithfulness: UnitScore
+    answer_relevancy: UnitScore
+    reasoning: str = ""
 
 
 async def evaluate_rag_answer(question: str, context_chunks: list, answer: str) -> dict:
@@ -18,7 +27,6 @@ async def evaluate_rag_answer(question: str, context_chunks: list, answer: str) 
     context = "\n\n".join(
         c.get("text", "") if isinstance(c, dict) else str(c) for c in context_chunks
     )
-    llm = get_llm(temperature=0)
 
     prompt = f"""Score this RAG answer on two metrics, each 0.0-1.0. Return ONLY valid JSON:
 {{
@@ -38,13 +46,15 @@ Question: {question}
 Answer:
 {answer[:1500]}"""
 
-    response = await llm.ainvoke(prompt)
-    result = safe_json_parse(
-        response.content if hasattr(response, "content") else str(response),
-        {"faithfulness": 0.5, "answer_relevancy": 0.5, "reasoning": "Eval parse failed"},
+    # If the judge's reply is unusable, score 0.0 so the faithfulness guardrail
+    # (< 0.5 → human review) trips. A neutral 0.5 here would silently pass an
+    # answer nobody actually evaluated.
+    result = await ainvoke_structured(
+        prompt,
+        RagScores,
+        fallback=RagScores(faithfulness=0.0, answer_relevancy=0.0, reasoning="Eval failed — judge reply invalid"),
+        tier="fast",
+        temperature=0,
+        name="eval.rag_judge",
     )
-    return {
-        "faithfulness": float(result.get("faithfulness", 0.5)),
-        "answer_relevancy": float(result.get("answer_relevancy", 0.5)),
-        "reasoning": result.get("reasoning", ""),
-    }
+    return result.data.model_dump()
