@@ -2,11 +2,9 @@
 Auto Apply Agent — Nodes
 """
 import os
-import json
-import httpx
-import asyncio
 from agents.shared.llm import get_llm, safe_json_parse
-from agents.shared.mcp_client import StdioMCPClient
+import agents.shared.tools  # noqa: F401  (registers the tools)
+from core.tools import call_tool
 
 async def search_jobs_node(state: dict) -> dict:
     """Node 1: Search live jobs based on target role and location using JSearch or Brave Search MCP."""
@@ -22,68 +20,33 @@ async def search_jobs_node(state: dict) -> dict:
     if jsearch_key and jsearch_key != "your_jsearch_api_key":
         try:
             logs.append("📡 Querying JSearch API for real-time listings...")
-            async with httpx.AsyncClient(timeout=15) as client:
-                res = await client.get(
-                    "https://jsearch.p.rapidapi.com/search",
-                    headers={
-                        "X-RapidAPI-Key": jsearch_key,
-                        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-                    },
-                    params={
-                        "query": f"{role} in {loc}",
-                        "page": "1",
-                        "num_pages": "1"
-                    }
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    jobs = data.get("data", [])
-                    for j in jobs[:limit]:
-                        found_jobs.append({
-                            "jobTitle": j.get("job_title", ""),
-                            "company": j.get("job_publisher", j.get("employer_name", "Unknown")),
-                            "location": f"{j.get('job_city', '')}, {j.get('job_country', '')}".strip(", "),
-                            "jobUrl": j.get("job_apply_link", ""),
-                            "salary": j.get("job_min_salary") or "Not disclosed",
-                            "jobType": j.get("job_employment_type", "Full-time"),
-                            "description": j.get("job_description", "")
-                        })
-                    logs.append(f"✅ JSearch found {len(found_jobs)} jobs successfully.")
+            found_jobs = await call_tool("jobs.jsearch", agent="auto_apply", query=f"{role} in {loc}", limit=limit)
+            logs.append(f"✅ JSearch found {len(found_jobs)} jobs successfully.")
         except Exception as e:
-            logs.append(f"⚠️ JSearch API query failed: {e}. Trying fallback...")
+            logs.append(f"⚠️ JSearch API query failed: {type(e).__name__}. Trying fallback...")
 
     # 2. Try Brave Search MCP fallback (if brave search key is set)
-    brave_key = os.getenv("BRAVE_SEARCH_API_KEY")
-    if not found_jobs and brave_key:
+    if not found_jobs and os.getenv("BRAVE_SEARCH_API_KEY"):
         try:
-            logs.append("🚀 [MCP] Initializing Brave Search MCP Server...")
-            env = os.environ.copy()
-            env["BRAVE_SEARCH_API_KEY"] = brave_key
-            client = StdioMCPClient("npx", ["-y", "@modelcontextprotocol/server-brave-search"], env=env)
-            if await client.initialize():
-                query = f"site:linkedin.com/jobs OR site:indeed.com/jobs '{role}' in '{loc}'"
-                mcp_res = await client.call_tool("brave_web_search", {"query": query})
-                await client.close()
-                
-                content_list = mcp_res.get("content", [])
-                text_content = "".join([c.get("text", "") for c in content_list if c.get("type") == "text"])
-                
-                logs.append("✅ Brave Search MCP successfully scraped search web results.")
-                # Feed the search text to the LLM to parse job postings
-                llm = get_llm()
-                parse_prompt = f"""Extract up to {limit} job listings from these search results. Return ONLY valid JSON array:
+            logs.append("🚀 [MCP] Searching the web via Brave Search MCP...")
+            query = f"site:linkedin.com/jobs OR site:indeed.com/jobs '{role}' in '{loc}'"
+            text_content = await call_tool("web.brave_search_mcp", agent="auto_apply", query=query)
+            logs.append("✅ Brave Search MCP returned web results.")
+            # Feed the search text to the LLM to parse job postings
+            llm = get_llm()
+            parse_prompt = f"""Extract up to {limit} job listings from these search results. Return ONLY valid JSON array:
 [
   {{"jobTitle": "Role Name", "company": "Company", "location": "City", "jobUrl": "Link", "description": "Short summary"}}
 ]
 Search Results:
 {text_content[:3000]}"""
-                response = await llm.ainvoke(parse_prompt)
-                parsed = safe_json_parse(response.content if hasattr(response, 'content') else str(response), [])
-                if isinstance(parsed, list):
-                    found_jobs = parsed[:limit]
-                    logs.append(f"✅ Scraped {len(found_jobs)} jobs via Brave Search MCP.")
+            response = await llm.ainvoke(parse_prompt)
+            parsed = safe_json_parse(response.content if hasattr(response, 'content') else str(response), [])
+            if isinstance(parsed, list):
+                found_jobs = parsed[:limit]
+                logs.append(f"✅ Scraped {len(found_jobs)} jobs via Brave Search MCP.")
         except Exception as e:
-            logs.append(f"⚠️ Brave Search MCP failed: {e}. Loading fallback mock listings...")
+            logs.append(f"⚠️ Brave Search MCP failed: {type(e).__name__}. Loading fallback mock listings...")
 
     # 3. Dynamic Mock Fallback (so it ALWAYS works out-of-the-box with beautiful results)
     if not found_jobs:

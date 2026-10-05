@@ -151,15 +151,27 @@ class StdioMCPClient:
         except Exception as e:
             print(f"[MCP CLIENT READ ERROR] {e}")
 
+    @property
+    def is_alive(self) -> bool:
+        return self.process is not None and self.process.returncode is None
+
     async def close(self):
-        """Close connection and terminate server subprocess."""
+        """Close connection and stop the server subprocess."""
         if self.read_task:
             self.read_task.cancel()
-        
+
         if self.process:
             try:
-                self.process.terminate()
-                await self.process.wait()
+                # EOF on stdin lets the MCP server exit by itself. On Windows the
+                # process is a cmd.exe shell, and terminate() would only kill the
+                # shell, leaving the node server running as an orphan.
+                if self.process.stdin and not self.process.stdin.is_closing():
+                    self.process.stdin.close()
+                try:
+                    await asyncio.wait_for(self.process.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    self.process.terminate()
+                    await self.process.wait()
             except Exception:
                 pass
             self.process = None

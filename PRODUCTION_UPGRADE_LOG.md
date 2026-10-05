@@ -12,8 +12,8 @@
 | 2 | `core/memory.py`: Postgres checkpointer, multi-turn Copilot + chat UI | ✅ Done (Module 3) |
 | 2 | `core/auth.py`: per-user signed JWT + org_id (service auth) | ✅ Done (Module 4) |
 | 3 | Human-in-the-loop: `interrupt()` gates + approval UI + atomic booking | ✅ Done (Module 5) |
-| 3 | `tools/`: registry, risk levels, MCP pool | ⏳ Next |
-| 4 | `supervisor/`: loop-style multi-step orchestrator, parallel panel | ⬜ |
+| 3 | `core/tools.py` + `core/mcp_pool.py`: tool registry, least privilege, circuit breaker, MCP pool | ✅ Done (Module 6) |
+| 4 | `supervisor/`: loop-style multi-step orchestrator, parallel panel | ⏳ Next |
 | 5 | `runtime/`: job queue, SSE streaming, rate limit | ⬜ |
 | 6 | `evals/` + `guardrails/`: CI gate, injection, bias | ⬜ |
 
@@ -589,3 +589,110 @@ Generated (fake) slots ya bina email ke koi gate nahi, kyunki tab book karne ko 
 - *"HITL kab zaroori hai?"* Jab action irreversible ho (email gaya to gaya), kisi insaan par asar ho (reject), ya external ho. Read-only answers par flag kaafi hai, gate nahi.
 - *"Approval ke beech server restart ho jaaye?"* Interrupt checkpoint ke saath Postgres mein save hai. Maine restart simulate karke verify kiya ki resume kaam karta hai.
 - *"Agent khud email kyun nahi bhejta approval ke baad?"* DB aur mailer Next.js mein hain, aur side effect graph node mein hota to resume par dobara chal sakta tha. Isliye agent decision record karta hai, aur execution ek jagah atomic tarike se hota hai.
+
+---
+
+# Module 6: Tool Registry + MCP Connection Pool
+
+## 1. Problem kya tha (probe karke mila)
+
+Implement karne se pehle har tool ko asli mein chala ke dekha. Jo mila:
+
+| # | Problem | Kaise pata chala | Asar |
+|---|---|---|---|
+| 1 | **GitHub MCP integration kabhi chali hi nahi.** Code `list_repositories_by_user` call karta tha, jo `@modelcontextprotocol/server-github` mein **exist nahi karta** | Server ke 26 tools list kiye: `Unknown tool: list_repositories_by_user` | Har screening mein MCP fail hota, chupchaap HTTP par jaata. "MCP se GitHub verify" wala feature sirf naam ka tha |
+| 2 | Har call par **naya `npx` process** (start → ek call → band) | Cold start ~**1.7–4.5s** | Har screening mein seconds waste |
+| 3 | `.env` ka **GitHub token invalid** (`Bad credentials`), aur HTTP fallback usi token ke saath **401** pe ruk jaata tha | `fetch_github_data("torvalds")` → `GitHub API returned 401`, 0 repos. Bina token ke → 7 repos | **GitHub skill verification poori tarah band thi.** Public data ke liye token ki zaroorat hi nahi |
+| 4 | GitHub MCP server mein **write tools** hain (`create_repository`, `push_files`, `create_issue`, `fork_repository`…) | Tool list | Valid token ke saath agent process ke paas GitHub par likhne ki capability. Least privilege ka ulta |
+| 5 | Windows par `close()` sirf `cmd.exe` ko `terminate` karta tha, andar ka `node` server **orphan** reh jaata tha (aur "closed pipe" errors) | Probe output | Har screening ek background process chhod deta |
+| 6 | Pinecone embedding + query **sync** calls **async** node ke andar | Code review | Retrieval ke dauraan poora event loop (saari requests) block |
+| 7 | Tools par na uniform timeout, na circuit breaker, na koi inventory | — | Ek dead dependency har request par apna timeout khaata |
+
+---
+
+## 2. Kya banaya
+
+### `core/tools.py`: Tool registry
+```python
+@tool("github.repos_http", agents={"candidate_screening"}, timeout_s=10, description="...")
+async def github_repos_http(username: str) -> list: ...
+
+repos = await call_tool("github.repos_http", agent="candidate_screening", username=u)
+```
+| Feature | Kaise | Kyun |
+|---|---|---|
+| **Least privilege** | Har tool ke `agents` declare hote hain; doosra agent call kare to `ToolNotAllowed` | FAQ agent GitHub tool nahi chala sakta. Galti se tool wire ho jaaye to test/production mein turant pakda jaata hai |
+| **Risk level** | Type `Risk = Literal["read"]`. Agent-service ke saare tools read-only hain | Side-effect wale actions (booking, email) jaan-boojh ke Next.js mein hain, aur sirf HITL approval ke baad chalte hain (Module 5). Write tool add karne ke liye type badalna padega, jo review mein dikh jaayega |
+| **Timeout** | `asyncio.wait_for(..., spec.timeout_s)` | Har tool ki hard limit |
+| **Circuit breaker** | 3 consecutive failures → 60s ke liye skip (`ToolUnavailable`, dependency tak call jaati hi nahi). Success par reset; cooldown ke baad ek trial call | Down dependency har request par timeout nahi khaati, turant fallback |
+| **Tracing** | Har tool ek LangChain `StructuredTool` hai, to Langfuse mein **tool span** banta hai (masked) + `tool_call name= agent= ok= ms=` log | Kaunsa tool slow/fail hai, seedha dikhta hai |
+| **Inventory** | `GET /tools` (auth): name, risk, agents, timeout, circuit state | Kaun kya kar sakta hai, ek jagah |
+
+### `core/mcp_pool.py`: MCP connection pool
+| Feature | Detail |
+|---|---|
+| **Ek long-lived session per server** | Pehli call par start, phir reuse. Process dead ho ya request timeout ho to session drop, agli call naya start |
+| **Per-server tool allowlist** | `github → {search_repositories}`, `brave → {brave_web_search}`, `calendar → {configured tool}`. Baaki sab `PermissionError`, **server tak pahunchne se pehle** |
+| Shutdown | FastAPI `lifespan` mein `close_all()` |
+
+### `agents/shared/mcp_client.py`
+- `close()` ab pehle **stdin band** karta hai (MCP server EOF par khud exit karta hai), 3s wait, tab `terminate`. Windows orphan fix.
+- `is_alive` property (pool ke liye).
+
+### `agents/shared/tools.py`: registered tools (sab `read`)
+| Tool | Agent | Notes |
+|---|---|---|
+| `github.repos_mcp` | candidate_screening | **Sahi tool** `search_repositories` with `user:<name>` |
+| `github.repos_http` | candidate_screening | Token 401 de to **anonymous retry** (warning log); 404 → `[]` |
+| `calendar.free_slots_mcp` | scheduler | Opt-in env se |
+| `jobs.jsearch` | auto_apply | Non-200 ab error hai (pehle chupchaap ignore) |
+| `web.brave_search_mcp` | auto_apply | Pool ke through |
+| `policy_docs.search` | faq | `asyncio.to_thread`, event loop block nahi |
+
+### Nodes
+- **Screening:** MCP (sirf token ho tab) → HTTP fallback, log mein source + fallback reason. **GitHub username validation** (GitHub ka apna rule: alphanumeric + single hyphen, max 39), taaki LLM ka nikala hua `../../admin` jaisa string URL mein na jaaye.
+- **Scheduler, auto-apply, FAQ:** `call_tool(...)` ke through; har node se `StdioMCPClient` ka seedha use hata.
+
+---
+
+## 3. Verification
+
+**Unit tests** `tests/test_tools.py`, 9 naye tests (total **59 passed**):
+- Galat agent → `ToolNotAllowed`; timeout enforce; **circuit breaker 3 failures ke baad 4th call dependency tak nahi jaati**; success breaker reset karta hai
+- **MCP write tools** (`create_repository`, `push_files`, `create_issue`, `fork_repository`) → `PermissionError`, aur koi server process start hi nahi hota
+- GitHub **expired token → 401 → anonymous retry** (headers verify), forks drop
+- Screening: MCP down → HTTP fallback, log mein reason
+- Invalid username par koi network call nahi
+- `GET /tools` auth maangta hai, sab tools `read`, sahi agents
+
+**Live (asli GitHub MCP server, pool ke saath):**
+```
+MCP call 1: 4.46s  (cold start)   9 repos
+MCP call 2: 0.19s  (pooled)       9 repos
+MCP call 3: 0.11s  (pooled)       9 repos   ← ~25–40x tez
+HTTP call:  1.16s                 7 repos
+server exited cleanly: True
+```
+
+---
+
+## 4. Tumhe kya karna hai / jo baaki hai
+
+| Point | Detail |
+|---|---|
+| **GitHub token** | Local `.env` (aur shayad Railway) ka `GITHUB_PERSONAL_ACCESS_TOKEN` invalid hai. Naya **read-only (public repo) token** banao, ya hata do (HTTP anonymous chalta hai, 60 req/hour limit). Token invalid hone par MCP fail → breaker → HTTP, isliye ab kuch tootega nahi |
+| `@modelcontextprotocol/server-github` deprecated hai | GitHub ka official `github/github-mcp-server` hai. Migrate karna next step |
+| Allowlist self-declared hai | `call_tool(..., agent="faq")` caller khud batata hai. Code paths ke liye yeh policy + test ka kaam karta hai. Jab LLM khud tools chunega (`bind_tools`), tab registry se sirf allowed tools dena (`tools_for(agent)`) agla step |
+| Breaker per-process | Multiple replicas mein har replica ka apna breaker. Shared state (Redis) zaroori nahi lagi |
+| **Auto-apply fake jobs** (alag issue) | JSearch/Brave na ho to node **nakli job listings** ("TechVanguard Solutions", nakli URLs) bana deta hai, aur woh asli results ki tarah return hoti hain. Is module mein nahi chheda. **Fix karna chahiye** |
+
+---
+
+## 5. Interview mein kaise bolna hai
+
+> "Tools module shuru karne se pehle maine har tool ko live chala ke dekha, aur kaafi problems nikli. GitHub MCP integration kabhi chali hi nahi thi: code ek aisa tool naam call karta tha jo server mein tha hi nahi, aur sab chupchaap HTTP par fallback hota tha. HTTP fallback bhi expired token ki wajah se 401 de raha tha, to GitHub verification poori tarah band thi. Uske baad maine ek **tool registry** banayi: har tool ka risk level, kaunsa agent use kar sakta hai, timeout, circuit breaker, aur Langfuse tool span. MCP ke liye **connection pool** banaya, jisse pehli call 4.5s aur baad ki 0.1–0.2s ho gayi. GitHub MCP server mein repo create/push jaise write tools bhi hain, to pool mein **per-server allowlist** hai: sirf `search_repositories` call ho sakta hai, baaki server tak pahunchte hi nahi. Saare agent tools read-only hain; side effects HITL approval ke baad hi hote hain."
+
+**Follow-up sawaal:**
+- *"Circuit breaker kyun?"* Dependency down ho to har request uska timeout khaati hai, aur threads/connections fill ho jaate hain. Breaker kuch failures ke baad turant fail karta hai aur fallback chalata hai.
+- *"MCP vs seedha API?"* MCP tools ko standard interface deta hai (koi bhi agent/LLM same protocol se tools discover aur call kar sake). Lekin har MCP server jo expose karta hai woh sab safe nahi hota. Isliye allowlist, aur simple read ke liye HTTP fallback.
+- *"Least privilege agents mein kaise?"* Har tool par allowed agents, aur LLM ko sirf wahi tools dikhte hain jo us agent ke liye allowed hain. Write/external actions approval ke peeche.

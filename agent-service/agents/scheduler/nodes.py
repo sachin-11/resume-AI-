@@ -1,11 +1,11 @@
 """
 Scheduler Agent — Nodes
 """
-import os
-import json
 from datetime import datetime, timedelta
 from agents.shared.llm import get_llm
-from agents.shared.mcp_client import StdioMCPClient
+import agents.shared.tools  # noqa: F401  (registers the tools)
+from core.mcp_pool import pool
+from core.tools import call_tool
 
 
 async def propose_slots(state: dict) -> dict:
@@ -22,33 +22,23 @@ async def propose_slots(state: dict) -> dict:
     timezone = state.get("timezone", "Asia/Kolkata")
 
     # ── Tier 1: Calendar MCP (opt-in via env) ──────────────────────
-    mcp_command = os.getenv("GOOGLE_CALENDAR_MCP_COMMAND")
-    mcp_args_raw = os.getenv("GOOGLE_CALENDAR_MCP_ARGS")
-    if mcp_command and mcp_args_raw:
+    if pool.is_configured("calendar"):
         try:
-            mcp_args = json.loads(mcp_args_raw)
-            tool_name = os.getenv("GOOGLE_CALENDAR_MCP_TOOL_NAME", "find_free_slots")
-            logs.append(f"📅 [MCP] Trying Calendar MCP server ('{mcp_command}')...")
-            client = StdioMCPClient(mcp_command, mcp_args, env=os.environ.copy())
-            if await client.initialize():
-                mcp_res = await client.call_tool(tool_name, {
-                    "timeframe": state.get("requested_timeframe", ""),
-                    "timezone": timezone,
-                })
-                await client.close()
-                content_list = mcp_res.get("content", [])
-                text_content = "".join([c.get("text", "") for c in content_list if c.get("type") == "text"])
-                parsed = json.loads(text_content)
-                if isinstance(parsed, list) and parsed:
-                    logs.append(f"✅ [MCP] Calendar MCP returned {len(parsed)} free slots.")
-                    return {
-                        "calendar_source": "calendar_mcp",
-                        "proposed_slots": parsed[:3],
-                        "logs": logs,
-                    }
-                logs.append("⚠️ Calendar MCP returned no slots — falling back.")
+            logs.append("📅 [MCP] Asking the calendar MCP server for free slots...")
+            parsed = await call_tool(
+                "calendar.free_slots_mcp", agent="scheduler",
+                timeframe=state.get("requested_timeframe", ""), timezone=timezone,
+            )
+            if parsed:
+                logs.append(f"✅ [MCP] Calendar MCP returned {len(parsed)} free slots.")
+                return {
+                    "calendar_source": "calendar_mcp",
+                    "proposed_slots": parsed[:3],
+                    "logs": logs,
+                }
+            logs.append("⚠️ Calendar MCP returned no slots — falling back.")
         except Exception as e:
-            logs.append(f"⚠️ Calendar MCP failed ({e}) — falling back to app-managed slots.")
+            logs.append(f"⚠️ Calendar MCP failed ({type(e).__name__}) — falling back to app-managed slots.")
     else:
         logs.append("ℹ️ Calendar MCP not configured (GOOGLE_CALENDAR_MCP_COMMAND/ARGS unset) — using app-managed slots.")
 

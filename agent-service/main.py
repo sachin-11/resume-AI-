@@ -21,7 +21,8 @@ from langgraph.types import Command
 
 load_dotenv()
 
-from core import memory
+from core import memory, tools
+from core.mcp_pool import pool as mcp_pool
 from core.auth import Caller, get_caller, resolve_user_id
 from core.observability import trace_guardrail
 from core.observability import RequestIdLogFilter, flush as flush_traces, new_request_id, request_id_var, run_agent
@@ -45,6 +46,7 @@ async def lifespan(_app):
     yield
     flush_traces()  # don't drop buffered Langfuse spans on shutdown / redeploy
     await memory.close_checkpointer()
+    await mcp_pool.close_all()  # stop long-lived MCP server processes
 
 
 app = FastAPI(
@@ -118,6 +120,13 @@ def health():
         "llm": "openai" if os.getenv("OPENAI_API_KEY") else "groq",
         "memory": memory.backend,
     }
+
+
+@app.get("/tools")
+def list_tools(caller: Caller = Depends(get_caller)):
+    """Every tool agents can call: risk level, which agents may use it, timeout, circuit state."""
+    import agents.shared.tools  # noqa: F401  (registers the tools)
+    return {"tools": tools.inventory()}
 
 
 @app.get("/graph-info")

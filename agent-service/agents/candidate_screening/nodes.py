@@ -1,14 +1,20 @@
 """
 Candidate Screening Agent — Nodes
 """
+import os
 import re
 from typing import Literal, Optional
 
-import httpx
 from pydantic import BaseModel
 
+import agents.shared.tools  # noqa: F401  (registers the tools)
 from core.llm import ainvoke_structured
+from core.tools import call_tool
 from core.types import Score, StrList
+
+
+# GitHub's own rule: alphanumerics and single hyphens, max 39 chars.
+GITHUB_USERNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 
 
 class CandidateInfo(BaseModel):
@@ -61,13 +67,8 @@ Resume:
     }
 
 
-import os
-import json
-import asyncio
-from agents.shared.mcp_client import StdioMCPClient
-
 async def fetch_github_data(state: dict) -> dict:
-    """Node 2: Fetch public GitHub repos to verify skills using GitHub MCP Server or HTTP fallback."""
+    """Node 2: Fetch public GitHub repos to verify skills — GitHub MCP server, falling back to the REST API."""
     github_username = state.get("extracted_github")
 
     if not github_username:
@@ -76,107 +77,37 @@ async def fetch_github_data(state: dict) -> dict:
             "github_skill_match": [],
             "logs": ["⏭️ No GitHub username found — skipping GitHub check"]
         }
-
-    token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN") or os.getenv("GITHUB_TOKEN")
-    
-    if token:
-        try:
-            # 🚀 Use GitHub MCP Server!
-            env = os.environ.copy()
-            env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
-            
-            client = StdioMCPClient("npx", ["-y", "@modelcontextprotocol/server-github"], env=env)
-            initialized = await client.initialize()
-            
-            if initialized:
-                # Call tool list_repositories_by_user to fetch candidate repos
-                # GitHub MCP server tool: list_repositories_by_user
-                mcp_res = await client.call_tool("list_repositories_by_user", {"username": github_username})
-                await client.close()
-                
-                # Parse MCP response contents
-                content_list = mcp_res.get("content", [])
-                text_content = ""
-                for item in content_list:
-                    if item.get("type") == "text":
-                        text_content += item.get("text", "")
-                
-                try:
-                    repos = json.loads(text_content)
-                except Exception:
-                    # If string format, parse or find pattern
-                    repos = []
-                    
-                if isinstance(repos, list) and len(repos) > 0:
-                    simplified = [
-                        {
-                            "name": r.get("name", ""),
-                            "language": r.get("language", ""),
-                            "stars": r.get("stargazers_count", r.get("stars", 0)),
-                            "description": (r.get("description") or "")[:100],
-                            "topics": r.get("topics", []),
-                        }
-                        for r in repos if not r.get("fork", False)
-                    ]
-                    languages = list(set(r["language"] for r in simplified if r["language"]))
-                    
-                    return {
-                        "github_repos": simplified,
-                        "github_skill_match": languages,
-                        "logs": [f"🚀 [MCP] Found {len(simplified)} repos via GitHub MCP. Languages: {languages}"]
-                    }
-        except Exception as mcp_err:
-            print(f"[MCP FALLBACK LOG] MCP failed: {mcp_err}, falling back to standard HTTP...")
-            # Fall through to HTTP
-
-    # Standard HTTP API fallback
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            headers = {
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "Resume-AI-Coach-Agent"
-            }
-            if token:
-                headers["Authorization"] = f"token {token}"
-                
-            res = await client.get(
-                f"https://api.github.com/users/{github_username}/repos",
-                params={"sort": "updated", "per_page": 10},
-                headers=headers
-            )
-            if res.status_code != 200:
-                return {
-                    "github_repos": [],
-                    "github_skill_match": [],
-                    "logs": [f"⚠️ GitHub API returned {res.status_code} for {github_username}"]
-                }
-
-            repos = res.json()
-            simplified = [
-                {
-                    "name": r.get("name", ""),
-                    "language": r.get("language", ""),
-                    "stars": r.get("stargazers_count", 0),
-                    "description": (r.get("description") or "")[:100],
-                    "topics": r.get("topics", []),
-                }
-                for r in repos if not r.get("fork", False)
-            ]
-
-            # Extract languages used
-            languages = list(set(r["language"] for r in simplified if r["language"]))
-
-            return {
-                "github_repos": simplified,
-                "github_skill_match": languages,
-                "logs": [f"✅ Found {len(simplified)} GitHub repos (HTTP). Languages: {languages}"]
-            }
-    except Exception as e:
+    if not GITHUB_USERNAME_RE.match(github_username):
         return {
             "github_repos": [],
             "github_skill_match": [],
-            "logs": [f"⚠️ GitHub fetch failed: {str(e)}"]
+            "logs": [f"⚠️ '{github_username[:40]}' is not a valid GitHub username — skipping GitHub check"]
         }
+
+    repos, source, errors = None, "", []
+    for tool_name, label in (("github.repos_mcp", "MCP"), ("github.repos_http", "HTTP")):
+        if tool_name == "github.repos_mcp" and not (os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN") or os.getenv("GITHUB_TOKEN")):
+            continue  # the MCP server needs a token; the REST API works without one
+        try:
+            repos, source = await call_tool(tool_name, agent="candidate_screening", username=github_username), label
+            break
+        except Exception as e:
+            errors.append(f"{label}: {type(e).__name__}")
+
+    if repos is None:
+        return {
+            "github_repos": [],
+            "github_skill_match": [],
+            "logs": [f"⚠️ GitHub fetch failed ({', '.join(errors)})"]
+        }
+
+    languages = sorted({r["language"] for r in repos if r["language"]})
+    fallback_note = f" (after {', '.join(errors)})" if errors else ""
+    return {
+        "github_repos": repos,
+        "github_skill_match": languages,
+        "logs": [f"✅ Found {len(repos)} GitHub repos via {source}{fallback_note}. Languages: {languages}"]
+    }
 
 
 async def match_against_jd(state: dict) -> dict:

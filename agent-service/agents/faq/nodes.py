@@ -4,13 +4,14 @@ FAQ Answerer Agent — Nodes
 from agents.shared.llm import get_llm
 from agents.shared.eval import evaluate_rag_answer
 from agents.shared.observability import trace_guardrail
-from agents.faq.store import retrieve_policy_chunks
+import agents.shared.tools  # noqa: F401  (registers the tools)
+from core.tools import call_tool
 
 
 async def retrieve_docs(state: dict) -> dict:
     """Node 1: Retrieve relevant company-doc chunks for the question."""
     question = state.get("question", "")
-    chunks = await retrieve_policy_chunks(question, top_k=5)
+    chunks = await call_tool("policy_docs.search", agent="faq", query=question, top_k=5)
 
     return {
         "retrieved_chunks": chunks,

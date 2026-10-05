@@ -100,8 +100,12 @@ async def ingest_policy_doc(doc_id: str, title: str, text: str) -> dict:
     return {"success": True, "chunksIndexed": len(vectors)}
 
 
-async def retrieve_policy_chunks(query: str, top_k: int = 5, min_score: float = 0.3) -> List[dict]:
-    """Embed the query, retrieve top-k policy-doc chunks, filter by similarity score."""
+def retrieve_policy_chunks_sync(query: str, top_k: int = 5, min_score: float = 0.3) -> List[dict]:
+    """Embed the query, retrieve top-k policy-doc chunks, filter by similarity score.
+
+    Blocking (embedding + Pinecone clients) — agents reach it through the
+    `policy_docs.search` tool, which runs it in a worker thread.
+    """
     index = _get_index()
     if index is None:
         return []
