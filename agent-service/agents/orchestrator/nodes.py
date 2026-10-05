@@ -5,7 +5,7 @@ from typing import Literal, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import interrupt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from agents.shared.llm import get_llm
 from agents.shared.observability import trace_guardrail
@@ -15,9 +15,42 @@ from agents.faq.graph import faq_agent
 from core.llm import ainvoke_structured
 
 
-class IntentOutput(BaseModel):
-    intent: Literal["resume_screening", "scheduling", "faq", "other"]
+Intent = Literal["resume_screening", "scheduling", "faq", "other"]
+MAX_STEPS = 3
+
+
+class PlanStep(BaseModel):
+    intent: Intent
+    condition: Literal["always", "if_shortlisted"] = "always"
+
+
+class PlanOutput(BaseModel):
+    steps: list[PlanStep] = Field(min_length=1, max_length=MAX_STEPS)
     reasoning: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_single_intent(cls, data):
+        # A one-step reply in the old {"intent": ...} shape is still a valid plan.
+        if isinstance(data, dict) and "steps" not in data and "intent" in data:
+            return {"steps": [{"intent": data["intent"]}], "reasoning": data.get("reasoning", "")}
+        return data
+
+
+def normalize_plan(steps: list[PlanStep]) -> list[dict]:
+    """Make an LLM plan safe to execute: each intent at most once, `if_shortlisted`
+    only after a screening step, "other" never mixed with real work, ≤ MAX_STEPS."""
+    plan: list[dict] = []
+    for step in steps:
+        if any(p["intent"] == step.intent for p in plan):
+            continue
+        condition = step.condition
+        if condition == "if_shortlisted" and not any(p["intent"] == "resume_screening" for p in plan):
+            condition = "always"
+        plan.append({"intent": step.intent, "condition": condition})
+    if len(plan) > 1:
+        plan = [p for p in plan if p["intent"] != "other"] or plan[:1]
+    return plan[:MAX_STEPS]
 
 
 def _prior_messages(state: dict, limit: int) -> list:
@@ -34,8 +67,8 @@ def _format_history(messages: list) -> str:
     )
 
 
-async def classify_intent(state: dict) -> dict:
-    """Node 1: Classify the user's message into a routable intent."""
+async def plan_steps(state: dict) -> dict:
+    """Node 1: Turn the message into a short plan of steps (usually one)."""
     message = state.get("user_message", "")
     history = _format_history(_prior_messages(state, limit=6))
     history_block = (
@@ -43,13 +76,22 @@ async def classify_intent(state: dict) -> dict:
         if history else ""
     )
 
-    prompt = f"""Classify this recruiter/candidate message into exactly one intent. Return ONLY valid JSON:
+    prompt = f"""Plan the steps needed to handle this recruiter/candidate message. Most messages need ONE step;
+use more (max {MAX_STEPS}) only when the message clearly asks for several things. Return ONLY valid JSON:
 {{
-  "intent": "resume_screening",
+  "steps": [{{"intent": "resume_screening", "condition": "always"}}],
   "reasoning": "one short sentence"
 }}
 
-intent must be one of:
+Examples:
+- "Screen Priya for the backend role" → [{{"intent": "resume_screening"}}]
+- "Screen her and if she's shortlisted set up an interview" →
+  [{{"intent": "resume_screening"}}, {{"intent": "scheduling", "condition": "if_shortlisted"}}]
+- "Book Ravi for Tuesday — also, what's our notice period policy?" → [{{"intent": "scheduling"}}, {{"intent": "faq"}}]
+
+condition: "always" (default) or "if_shortlisted" (run only if an earlier screening step shortlists the candidate).
+
+Each intent must be one of:
 - "resume_screening": asking to screen/evaluate/match a candidate's resume against a job
 - "scheduling": asking to book, propose, reschedule, or check an interview/calendar slot
 - "faq": asking about company policy or HR process (leave, benefits, hiring policy) — answered from company documents
@@ -62,19 +104,62 @@ Message:
 
     result = await ainvoke_structured(
         prompt,
-        IntentOutput,
-        fallback=IntentOutput(intent="other", reasoning="Could not classify — defaulting to general handler"),
+        PlanOutput,
+        fallback=PlanOutput(steps=[PlanStep(intent="other")], reasoning="Could not plan — defaulting to general handler"),
         tier="fast",
         temperature=0,
-        name="orchestrator.classify_intent",
+        name="orchestrator.plan",
     )
-    intent, reasoning = result.data.intent, result.data.reasoning
+    plan = normalize_plan(result.data.steps)
+    reasoning = result.data.reasoning
+    summary = " → ".join(
+        p["intent"] + (" (if shortlisted)" if p["condition"] == "if_shortlisted" else "") for p in plan
+    )
 
     return {
-        "intent": intent,
+        "plan": plan,
+        "step_index": 0,
+        "executed_steps": [],
+        "skipped_steps": [],
+        "intent": plan[0]["intent"],
         "intent_reasoning": reasoning,
-        "logs": [f"🧭 Classified intent: '{intent}' — {reasoning}"],
+        "logs": [f"🧭 Plan: {summary} — {reasoning}"],
     }
+
+
+def supervisor(state: dict) -> dict:
+    """Pick the next plan step whose condition holds; "finalize" when the plan is done.
+
+    Deterministic on purpose: the LLM decides *what* to do once (the plan); whether
+    a conditional step runs is decided from actual results, not by another LLM call.
+    Every pass advances step_index, so the loop always ends within len(plan) steps.
+    """
+    plan = state.get("plan") or []
+    index = state.get("step_index", 0)
+    skipped = list(state.get("skipped_steps") or [])
+    logs = []
+
+    while index < len(plan):
+        step = plan[index]
+        index += 1
+        if step["condition"] == "if_shortlisted":
+            decision = ((state.get("resume_screener_result") or {}).get("report") or {}).get("screeningDecision")
+            if decision != "shortlist":
+                reason = f"candidate was not shortlisted ({decision or 'no screening result'})"
+                skipped.append({"intent": step["intent"], "reason": reason})
+                logs.append(f"⏭️ Supervisor skipped {step['intent']} — {reason}")
+                continue
+        logs.append(f"🧑‍✈️ Supervisor → {step['intent']} (step {index}/{len(plan)})")
+        return {
+            "step_index": index,
+            "next_step": step["intent"],
+            "intent": step["intent"],
+            "executed_steps": [*(state.get("executed_steps") or []), step["intent"]],
+            "skipped_steps": skipped,
+            "logs": logs,
+        }
+
+    return {"step_index": index, "next_step": "finalize", "skipped_steps": skipped, "logs": logs}
 
 
 async def run_resume_screener(state: dict) -> dict:
@@ -310,65 +395,81 @@ def _reply_text(intent: str, result: dict) -> str:
     return result.get("message", "")
 
 
-def finalize(state: dict) -> dict:
-    """Node: assemble the final response, run the guardrail check, and log it to Langfuse.
+RESULT_KEYS = {
+    "resume_screening": "resume_screener_result",
+    "scheduling": "scheduler_result",
+    "faq": "faq_result",
+    "other": "other_result",
+}
 
-    This is the "Guardrail + eval" gate: a human-review flag with reasons, plus a
-    trace (input/output/scores) sent to Langfuse if configured — otherwise a no-op.
-    """
-    intent = state.get("intent", "other")
-    result_map = {
-        "resume_screening": state.get("resume_screener_result", {}),
-        "scheduling": state.get("scheduler_result", {}),
-        "faq": state.get("faq_result", {}),
-        "other": state.get("other_result", {}),
-    }
-    result = result_map.get(intent, {})
 
-    needs_review = False
+def _review_reasons(intent: str, result: dict) -> list[str]:
     reasons = []
-
     if intent == "resume_screening":
         report = result.get("report", {})
-        decision = report.get("screeningDecision")
         if report.get("aiFallback"):
-            needs_review = True
             reasons.append("Screening AI reply was invalid — decision is a default, not an AI judgement")
-        if decision == "reject" and not report.get("humanReview"):
-            needs_review = True
+        if report.get("screeningDecision") == "reject" and not report.get("humanReview"):
             reasons.append("Agent recommended reject — flagged for human confirmation")
         elif result.get("status") == "missing_input":
-            needs_review = True
             reasons.append("Required input missing")
     elif intent == "faq":
         if not result.get("sources"):
-            needs_review = True
             reasons.append("No indexed company docs matched the question — answer is a no-context fallback")
         elif result.get("faithfulness", 1.0) < 0.5:
-            needs_review = True
             reasons.append(f"Low faithfulness score ({result.get('faithfulness'):.2f}) — possible hallucination")
     elif result.get("status") == "not_implemented":
-        needs_review = True
         reasons.append("Routed sub-agent is not implemented yet")
+    return reasons
+
+
+def finalize(state: dict) -> dict:
+    """Node: combine every executed step into one response, run the guardrail check,
+    and log it to Langfuse (no-op if unconfigured)."""
+    executed = state.get("executed_steps") or [state.get("intent", "other")]
+    skipped = state.get("skipped_steps") or []
+
+    steps = []
+    for intent in executed:
+        result = state.get(RESULT_KEYS.get(intent, "other_result"), {}) or {}
+        reasons = _review_reasons(intent, result)
+        steps.append({
+            "intent": intent,
+            "result": result,
+            "reply": _reply_text(intent, result),
+            "needs_human_review": bool(reasons),
+            "review_reasons": reasons,
+        })
+
+    reasons = [r for step in steps for r in step["review_reasons"]]
+    needs_review = bool(reasons)
+    reply = "\n\n".join(step["reply"] for step in steps if step["reply"])
+    for skip in skipped:
+        reply += f"\n\nSkipped {skip['intent']} — {skip['reason']}."
+    primary = steps[-1] if steps else {"intent": "other", "result": {}}
 
     trace_guardrail(
         name="orchestrator-turn",
-        input_data={"user_message": state.get("user_message", ""), "intent": intent},
-        output_data=result,
+        input_data={"user_message": state.get("user_message", ""), "plan": state.get("plan", [])},
+        output_data=[step["result"] for step in steps],
         scores={"needs_human_review": 1.0 if needs_review else 0.0},
-        metadata={"reasons": reasons},
+        metadata={"reasons": reasons, "steps": executed, "skipped": len(skipped)},
     )
 
     return {
         "needs_human_review": needs_review,
         "review_reasons": reasons,
         "final_response": {
-            "intent": intent,
+            # `intent`/`result` = the last step (unchanged shape for one-step turns);
+            # `steps` carries every step of a multi-step plan.
+            "intent": primary["intent"],
             "intent_reasoning": state.get("intent_reasoning", ""),
-            "result": result,
+            "result": primary["result"],
+            "steps": steps,
+            "skipped_steps": skipped,
             "needs_human_review": needs_review,
             "review_reasons": reasons,
         },
-        "messages": [AIMessage(content=_reply_text(intent, result))],
-        "logs": ["🏁 Orchestrator finalized response" + (" — 🛡️ flagged for human review" if needs_review else "")],
+        "messages": [AIMessage(content=reply.strip())],
+        "logs": [f"🏁 Orchestrator finalized {len(steps)} step(s)" + (" — 🛡️ flagged for human review" if needs_review else "")],
     }

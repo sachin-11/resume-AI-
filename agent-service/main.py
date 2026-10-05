@@ -670,7 +670,7 @@ async def orchestrate(
     Central LangGraph router — classifies a free-text message and dispatches
     it to the right sub-agent (resume screener, scheduler, or FAQ answerer).
 
-    Nodes: classify_intent →(route)→ resume_screening | scheduling | faq | other → finalize
+    Nodes: planner → supervisor ⇄ (resume_screening | scheduling | faq | other) → finalize
 
     With `user_id`, the turn is part of a persisted conversation thread (a new
     `thread_id` is minted if none is given and returned in the response).
@@ -683,6 +683,11 @@ async def orchestrate(
         "messages": [HumanMessage(content=request.user_message)],
         "user_message": request.user_message,
         # Per-turn fields are reset so nothing from the previous turn leaks into this one.
+        "plan": [],
+        "step_index": 0,
+        "next_step": "",
+        "executed_steps": [],
+        "skipped_steps": [],
         "intent": "",
         "intent_reasoning": "",
         "resume_screener_result": {},

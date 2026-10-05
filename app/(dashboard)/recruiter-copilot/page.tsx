@@ -15,7 +15,7 @@ import { ApprovalCard, type Approval, type ApprovalAnswer } from "./approval-car
 interface Slot { startsAt: string; durationMin?: number }
 
 interface Meta {
-  intent?: string;
+  intents?: string[];
   needsReview?: boolean;
   reviewReasons?: string[];
   sources?: string[];
@@ -53,6 +53,7 @@ const INTENT_LABEL: Record<string, string> = {
 };
 
 const SUGGESTIONS = [
+  "Screen this candidate and, if shortlisted, propose interview slots",
   "Screen this candidate against the job description",
   "Propose interview slots for her next week",
   "What is our leave policy?",
@@ -86,17 +87,22 @@ interface CopilotResponse {
   intent?: string;
   needs_human_review?: boolean;
   review_reasons?: string[];
-  result?: { sources?: string[]; proposed_slots?: Slot[] };
+  result?: StepResult;
+  // Multi-step turns (planner + supervisor): every executed step, in order.
+  steps?: { intent: string; result: StepResult }[];
   error?: string;
 }
 
+interface StepResult { sources?: string[]; proposed_slots?: Slot[] }
+
 function metaFrom(data: CopilotResponse): Meta {
+  const steps = data.steps?.length ? data.steps : data.intent ? [{ intent: data.intent, result: data.result ?? {} }] : [];
   return {
-    intent: data.intent,
+    intents: steps.map((s) => s.intent),
     needsReview: data.needs_human_review,
     reviewReasons: data.review_reasons,
-    sources: data.result?.sources,
-    slots: data.result?.proposed_slots,
+    sources: steps.flatMap((s) => s.result?.sources ?? []),
+    slots: steps.flatMap((s) => s.result?.proposed_slots ?? []),
   };
 }
 
@@ -259,8 +265,15 @@ export default function RecruiterCopilotPage() {
   function renderMeta(meta: Meta) {
     return (
       <div className="mt-3 space-y-2">
-        {meta.intent && (
-          <Badge variant="secondary" className="text-[11px]">{INTENT_LABEL[meta.intent] ?? meta.intent}</Badge>
+        {meta.intents && meta.intents.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {meta.intents.map((intent, i) => (
+              <span key={intent} className="flex items-center gap-1">
+                {i > 0 && <span className="text-xs text-muted-foreground">→</span>}
+                <Badge variant="secondary" className="text-[11px]">{INTENT_LABEL[intent] ?? intent}</Badge>
+              </span>
+            ))}
+          </div>
         )}
         {meta.needsReview && (
           <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-500">

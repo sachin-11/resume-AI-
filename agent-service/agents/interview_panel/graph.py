@@ -12,7 +12,7 @@ Then consensus score is generated.
           [hr_eval]         ├→ [consensus] → [END]
           [domain_eval]     ─┘
 """
-from langgraph.graph import StateGraph, END
+from langgraph.graph import START, StateGraph, END
 from typing import TypedDict, List, Literal, Optional, Annotated
 import operator
 from pydantic import BaseModel
@@ -249,11 +249,13 @@ def build_interview_panel_agent():
     workflow.add_node("domain_eval",    domain_expert_eval)
     workflow.add_node("consensus",      panel_consensus)
 
-    workflow.set_entry_point("technical_eval")
-    # Sequential for now (parallel requires async setup)
-    workflow.add_edge("technical_eval", "hr_eval")
-    workflow.add_edge("hr_eval",        "domain_eval")
-    workflow.add_edge("domain_eval",    "consensus")
+    # Fan-out: the three panelists are independent, so they run in the same
+    # superstep (concurrently). Each writes its own state key and `logs` has an
+    # append reducer, so their writes can't collide.
+    for panelist in ("technical_eval", "hr_eval", "domain_eval"):
+        workflow.add_edge(START, panelist)
+    # Fan-in: consensus runs once, after all three have finished.
+    workflow.add_edge(["technical_eval", "hr_eval", "domain_eval"], "consensus")
     workflow.add_edge("consensus",      END)
 
     return workflow.compile()

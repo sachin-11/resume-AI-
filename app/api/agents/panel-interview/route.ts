@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
         role: interviewSession.role,
         qa_pairs: qaPairs,
       }),
-      signal: AbortSignal.timeout(180_000), // 3 min — 3 agents run sequentially
+      signal: AbortSignal.timeout(120_000), // the 3 panelists run in parallel
     });
     const data = await res.json();
     logAgentUsage(data.usage, { userId: session.user.id, feature: "agent:panel-interview" });

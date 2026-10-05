@@ -13,8 +13,8 @@
 | 2 | `core/auth.py`: per-user signed JWT + org_id (service auth) | ✅ Done (Module 4) |
 | 3 | Human-in-the-loop: `interrupt()` gates + approval UI + atomic booking | ✅ Done (Module 5) |
 | 3 | `core/tools.py` + `core/mcp_pool.py`: tool registry, least privilege, circuit breaker, MCP pool | ✅ Done (Module 6) |
-| 4 | `supervisor/`: loop-style multi-step orchestrator, parallel panel | ⏳ Next |
-| 5 | `runtime/`: job queue, SSE streaming, rate limit | ⬜ |
+| 4 | Planner + supervisor loop (multi-step), parallel interview panel | ✅ Done (Module 7) |
+| 5 | `runtime/`: job queue, SSE streaming, rate limit | ⏳ Next |
 | 6 | `evals/` + `guardrails/`: CI gate, injection, bias | ⬜ |
 
 ---
@@ -736,3 +736,97 @@ WHERE company IN ('TechVanguard Solutions', 'Cognitive AI Systems')
 
 ## Interview mein
 > "Ek audit mein mila ki auto-apply agent search source na hone par 'realistic' nakli jobs generate karta tha, aur woh user ke tracker mein asli jobs ki tarah save hoti thi. Maine principle rakha: **agent kabhi data fabricate nahi karega.** Source nahi hai to khaali result aur saaf reason. LLM se extract hui listings par grounding check lagaya: URL search results mein literally hona chahiye. Aur contact email sirf tab, jab woh posting mein likha ho. Dikhne mein 'demo friendly' fallback production mein trust todta hai."
+
+---
+
+# Module 7: Supervisor (Multi-step) + Parallel Interview Panel
+
+## 1. Problem kya tha
+
+| # | Problem | Asar |
+|---|---|---|
+| 1 | Orchestrator **single-hop router** tha: ek message → ek intent → ek sub-agent | "Is candidate ko screen karo aur **shortlist ho to** interview set karo" jaisi request mein sirf ek kaam hota. Recruiter ko do messages bhejne padte, aur result dekh ke khud decide karna padta |
+| 2 | Interview panel ke 3 agents (Technical, HR, Domain) **ek ke baad ek** chalte the, jabki teeno independent hain. Code mein comment tha *"Sequential for now (parallel requires async setup)"* | Latency ~3x; Next.js route ko 180s timeout rakhna pada |
+
+---
+
+## 2. Parallel panel
+
+```python
+for panelist in ("technical_eval", "hr_eval", "domain_eval"):
+    workflow.add_edge(START, panelist)                                       # fan-out
+workflow.add_edge(["technical_eval", "hr_eval", "domain_eval"], "consensus")  # fan-in
+```
+- State pehle se parallel-safe thi: har panelist **alag key** likhta hai (`technical_verdict`, …), aur `logs` par `operator.add` reducer hai, to writes collide nahi hote.
+- "Async setup" wala comment galat tha: nodes pehle se async the, sirf edges badalne the.
+- Next.js `panel-interview` timeout 180s → 120s.
+
+---
+
+## 3. Planner + Supervisor loop
+
+```
+[planner] → [supervisor] ─(next_step)→ worker ─(gate)→ [supervisor] ─ … ─(plan done)→ [finalize]
+```
+
+| Piece | Kya karta hai | Design decision |
+|---|---|---|
+| **Planner** (`plan_steps`, 1 LLM call) | Message ko **≤3 steps** ke plan mein badalta hai: `[{intent, condition}]`. `condition`: `always` ya **`if_shortlisted`** | Prompt mein examples. Zyada messages 1 step hi rehte hain |
+| `PlanOutput` schema | Pydantic: 1–3 steps, valid intents. Purana `{"intent": ...}` shape bhi accept (1-step plan) | Backward compatible; invalid → re-ask → fallback `other` (Module 1 ka gateway) |
+| **`normalize_plan`** (deterministic) | Har intent ek baar; `if_shortlisted` sirf tab jab pehle screening step ho (warna `always`); `other` asli kaam ke saath mix ho to hata do; max 3 | LLM ka plan execute karne se pehle **code se sanitize** |
+| **Supervisor** (deterministic, LLM nahi) | Plan mein agla step chunta hai; `if_shortlisted` step ke liye **asli screening result** (`screeningDecision == "shortlist"`) check karta hai; condition fail → skip + reason | LLM ek baar *kya karna hai* decide karta hai; *condition poori hui ya nahi* actual data se decide hoti hai, doosre LLM call se nahi. Har pass `step_index` badhata hai, to loop **hamesha ≤ len(plan)** steps mein khatam (infinite loop impossible) |
+| Workers → supervisor | Har worker (aur HITL gate) ke baad control wapas supervisor ke paas | Classic supervisor pattern |
+| **Finalize** | Har executed step: result, reply, review reasons. Combined reply + "Skipped scheduling — candidate was not shortlisted (reject)." `final_response.steps[]`; `intent`/`result` = last step (single-step shape same) | Purane clients/tests bina badle chalte rahe |
+| State | `plan`, `step_index`, `next_step`, `executed_steps`, `skipped_steps`, sab **har turn reset** | Pichle turn ka plan leak nahi hota |
+
+### HITL ke saath interplay (Module 5)
+- Screening "reject" → `review_rejection` gate par **ruk jaata hai**.
+- Recruiter **confirm** kare → supervisor `if_shortlisted` scheduling **skip** karta hai.
+- Recruiter **shortlist** mein override kare → wahi scheduling step **chal jaata hai**.
+- Yaani human decision aage ke plan ko control karta hai.
+
+### UI
+Har reply par steps ke badges (`Resume screening → Scheduling`); FAQ sources aur slots kisi bhi step se; naya suggestion "Screen this candidate and, if shortlisted, propose interview slots".
+
+---
+
+## 4. Verification
+
+**Tests** (total **74 passed**):
+- `test_panel.py`: har fake LLM call 0.3s. Naya graph ~0.3s mein, aur consensus + teeno log lines sahi. **Purane sequential graph par yahi test 0.92s mein fail hota hai** (verified), to test asli farak pakadta hai.
+- `test_supervisor.py`: plan dedupe + cap; `if_shortlisted` bina screening ke → `always`; `other` mix mein drop; shortlist → scheduling chali; **reject confirm → scheduling skipped** (reason ke saath); **override → scheduling chali**; do independent steps (scheduling + FAQ) ek turn mein, review flag sirf FAQ par.
+- Purane router tests planner ke liye update (`plan_steps`).
+
+**Live (asli LLM, synthetic candidates):**
+```
+"Screen … and if they're shortlisted propose interview slots"
+ Asha (strong) → Plan: resume_screening → scheduling (if shortlisted)
+               → SHORTLIST 85/100 → scheduling chali → combined reply ✅
+ Rohan (weak)  → same plan → REJECT → ⏸ approval maanga → recruiter confirm
+               → "Skipped scheduling — candidate was not shortlisted (reject)." ✅
+"What is the leave policy?"  → Plan: faq → Leave Policy se jawab ✅
+"hi there, good morning!"    → Plan: other ✅
+```
+`tsc` + ESLint clean. **UI browser mein test nahi hua.**
+
+---
+
+## 5. Trade-offs / jo baaki hai
+
+| Point | Detail |
+|---|---|
+| Steps sequential hain | Plan ke independent steps (jaise scheduling + FAQ) bhi ek ke baad ek chalte hain. LangGraph `Send` se parallel ho sakte hain, lekin conditional steps ke liye order chahiye |
+| Conditions limited | Abhi sirf `if_shortlisted`. Naye conditions supervisor mein ek line se add hote hain |
+| Re-planning nahi | Plan turn ki shuruaat mein ek baar banta hai. Beech mein naya step add karna (dynamic re-plan) jaan-boojh ke nahi rakha, taaki predictable rahe |
+| Max 3 steps | Cost aur latency ke liye. Zyada chahiye to `MAX_STEPS` |
+
+---
+
+## 6. Interview mein kaise bolna hai
+
+> "Orchestrator pehle single-hop router tha. Maine use **planner + supervisor** pattern mein badla: ek LLM call message ko maximum 3 steps ke plan mein badalta hai, jaise 'screen, aur shortlist ho to schedule'. Plan ko code se sanitize karta hoon: dedupe, conditions valid, cap. Phir ek **deterministic supervisor** steps chalata hai aur conditional step ke liye actual result check karta hai, kisi aur LLM call se nahi. Har iteration index aage badhata hai, to loop hamesha khatam hota hai. Yeh HITL ke saath judta hai: AI reject kare aur recruiter override karke shortlist kare, to aage ka scheduling step khul jaata hai. Saath mein interview panel ke 3 independent agents ko fan-out/fan-in se parallel kiya. State pehle se alag keys aur append reducer wali thi, to sirf edges badalne pade, aur latency ~3x kam hui. Test aisa likha jo sequential version par fail hota hai."
+
+**Follow-up sawaal:**
+- *"Supervisor LLM kyun nahi?"* LLM har step par 'aage kya' decide kare to cost badhti hai, aur woh loop mein phans sakta hai ya condition ko galat padh sakta hai. Planning ek baar LLM se, execution deterministic: predictable, testable, sasta.
+- *"Parallel nodes mein state conflict?"* Har parallel node alag key likhta hai; shared list par reducer (`operator.add`). Same key par bina reducer ke do writes aayein to LangGraph `InvalidUpdateError` deta hai.
+- *"Infinite loop kaise roka?"* Plan max 3 steps, supervisor har pass mein index badhata hai, aur LangGraph ka recursion limit backstop hai.

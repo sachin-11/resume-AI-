@@ -4,20 +4,20 @@ import asyncio
 from agent.nodes import score_check
 from agents.candidate_screening.nodes import match_against_jd
 from agents.interview_panel.graph import panel_consensus, technical_agent_eval
-from agents.orchestrator.nodes import classify_intent, finalize
+from agents.orchestrator.nodes import finalize, plan_steps
 from agents.shared.eval import evaluate_rag_answer
 
 
 def test_router_accepts_known_intent(fake_llm):
     fake_llm('{"intent": "faq", "reasoning": "policy question"}')
-    out = asyncio.run(classify_intent({"user_message": "What is the leave policy?"}))
-    assert out["intent"] == "faq"
+    out = asyncio.run(plan_steps({"user_message": "What is the leave policy?"}))
+    assert out["plan"] == [{"intent": "faq", "condition": "always"}]
 
 
 def test_router_unknown_intent_falls_back_to_other(fake_llm):
     fake_llm('{"intent": "delete_database"}', '{"intent": "hack"}')
-    out = asyncio.run(classify_intent({"user_message": "x"}))
-    assert out["intent"] == "other"
+    out = asyncio.run(plan_steps({"user_message": "x"}))
+    assert out["plan"] == [{"intent": "other", "condition": "always"}]
 
 
 def test_screening_fallback_is_flagged_for_human_review(fake_llm):

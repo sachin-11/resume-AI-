@@ -25,8 +25,15 @@ class OrchestratorState(TypedDict):
     github_username: Optional[str]
     existing_slots: List[dict]   # InterviewSlot rows from Prisma, for the scheduling branch
 
+    # Planning + supervisor loop (all reset every turn)
+    plan: List[dict]             # [{intent, condition}] — up to 3 steps, e.g. screen → (if shortlisted) schedule
+    step_index: int              # next plan step the supervisor will look at
+    next_step: str               # supervisor's routing decision: an intent, or "finalize"
+    executed_steps: List[str]    # intents actually run this turn, in order
+    skipped_steps: List[dict]    # [{intent, reason}] — steps whose condition wasn't met
+
     # Routing
-    intent: str            # resume_screening | scheduling | faq | other
+    intent: str            # step currently/last run: resume_screening | scheduling | faq | other
     intent_reasoning: str
 
     # Sub-agent outputs (only the one matching `intent` gets filled in)
