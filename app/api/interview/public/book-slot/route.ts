@@ -18,19 +18,27 @@ export async function POST(req: NextRequest) {
     if (!invite) return NextResponse.json({ error: "Invalid token" }, { status: 404 });
     if (invite.status === "completed") return NextResponse.json({ error: "Interview already completed" }, { status: 400 });
 
-    const slot = await db.interviewSlot.findFirst({
-      where: { id: slotId, campaignId: invite.campaignId, isBooked: false, startsAt: { gte: new Date() } },
+    // One transaction: claim the slot atomically (the isBooked=false condition is part
+    // of the UPDATE, so two candidates can never both get it), free the candidate's
+    // previous slot when rescheduling, and link the invite — all or nothing.
+    const slot = await db.$transaction(async (tx) => {
+      const claimed = await tx.interviewSlot.updateMany({
+        where: { id: slotId, campaignId: invite.campaignId, isBooked: false, startsAt: { gte: new Date() } },
+        data: { isBooked: true },
+      });
+      if (claimed.count !== 1) return null;
+
+      if (invite.slotId && invite.slotId !== slotId) {
+        await tx.interviewSlot.update({ where: { id: invite.slotId }, data: { isBooked: false } });
+      }
+      const booked = await tx.interviewSlot.findUniqueOrThrow({ where: { id: slotId } });
+      await tx.candidateInvite.update({
+        where: { token },
+        data: { slotId, scheduledAt: booked.startsAt },
+      });
+      return booked;
     });
     if (!slot) return NextResponse.json({ error: "Slot not available" }, { status: 400 });
-
-    // Book the slot
-    await Promise.all([
-      db.interviewSlot.update({ where: { id: slotId }, data: { isBooked: true } }),
-      db.candidateInvite.update({
-        where: { token },
-        data: { slotId, scheduledAt: slot.startsAt },
-      }),
-    ]);
 
     // Send confirmation + reminder email
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
