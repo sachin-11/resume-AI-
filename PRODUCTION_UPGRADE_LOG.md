@@ -500,7 +500,7 @@ legacy header: default on, AGENT_SEND_LEGACY_SECRET=false par off ✅
 |---|---|---|
 | 1 | Screener "reject" bolta tha to sirf `needs_human_review: true` **flag** response mein jaata tha. Graph rukta nahi tha | Flag ignore ho sakta tha; AI ka reject hi effectively final tha. Kisi ki career par asar wala decision bina insaan ke |
 | 2 | Scheduler sirf slots **propose** karta tha, book ya email kuch nahi karta tha | Copilot asli kaam nahi kar sakta tha. Aur agar booking/email add karte bina approval ke, to AI candidate ko khud email bhej deta |
-| 3 | Existing `interview/public/book-slot` route mein `isBooked` check aur update **atomic nahi** hain | Do log ek saath ek hi slot book kar sakte hain (race condition). **Is module mein us route ko nahi chheda**, sirf naye Copilot booking ko atomic banaya |
+| 3 | Existing `interview/public/book-slot` route mein `isBooked` check aur update **atomic nahi** the | Do log ek saath ek hi slot book kar sakte the (race condition). Alag commit `8502ad0` mein fix kiya (neeche trade-offs dekho) |
 
 ---
 
@@ -576,7 +576,7 @@ Generated (fake) slots ya bina email ke koi gate nahi, kyunki tab book karne ko 
 | Approval aur booking do steps hain | Agent "approved" record karta hai, phir Next.js book karta hai. Beech mein slot chala jaaye to UI "Slot was taken" dikhata hai, lekin thread history mein "Approved — booking…" reh jaata hai. Fix: booking ke baad result agent ko wapas bhejna (ek aur graph step) |
 | Approval expiry nahi | Pending approval hamesha ke liye ruka reh sakta hai. Next step: X ghante baad auto-decline / reminder |
 | Approvals ki list nahi | Approval sirf us conversation ke andar dikhta hai. Ek "Pending approvals" inbox (saare threads) agla UX step |
-| Purana `public/book-slot` race | Wahan bhi wahi atomic `updateMany` pattern lagana chahiye (alag chhota fix) |
+| ~~Purana `public/book-slot` race~~ | **Fix ho gaya** (commit `8502ad0`): ek transaction mein atomic `updateMany` claim + reschedule par purana slot free + invite link. Local DB par 10 parallel requests: pehle **10/10** bookings "successful", ab exactly **1** |
 | Low-faithfulness FAQ | Abhi bhi sirf flag hai, gate nahi; answer read-only hai, isliye flag kaafi hai |
 
 ---
