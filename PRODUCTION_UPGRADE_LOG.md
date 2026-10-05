@@ -11,8 +11,8 @@
 | 1 | `core/observability.py`: per-node tracing, request ID, token/cost tracking | ✅ Done (Module 2) |
 | 2 | `core/memory.py`: Postgres checkpointer, multi-turn Copilot + chat UI | ✅ Done (Module 3) |
 | 2 | `core/auth.py`: per-user signed JWT + org_id (service auth) | ✅ Done (Module 4) |
-| 3 | `hitl/`: interrupt() + approvals | ⏳ Next |
-| 3 | `tools/`: registry, risk levels, MCP pool | ⬜ |
+| 3 | Human-in-the-loop: `interrupt()` gates + approval UI + atomic booking | ✅ Done (Module 5) |
+| 3 | `tools/`: registry, risk levels, MCP pool | ⏳ Next |
 | 4 | `supervisor/`: loop-style multi-step orchestrator, parallel panel | ⬜ |
 | 5 | `runtime/`: job queue, SSE streaming, rate limit | ⬜ |
 | 6 | `evals/` + `guardrails/`: CI gate, injection, bias | ⬜ |
@@ -489,3 +489,103 @@ legacy header: default on, AGENT_SEND_LEGACY_SECRET=false par off ✅
 - *"JWT hi kyun, mTLS ya API gateway kyun nahi?"* mTLS service ko authenticate karta hai, **user** ko nahi. Mujhe har request ke saath user aur org identity chahiye thi, jo token claims se aati hai. Dono saath bhi lag sakte hain.
 - *"HS256 vs RS256?"* Do trusted services ke liye HS256 simple aur tez hai. Agar teesri service sirf verify kare aur sign na kar sake, tab asymmetric (RS256/EdDSA) lunga.
 - *"Token chori ho jaaye to?"* 2 minute expiry, ek user, ek audience. Aur chahiye to `jti` blacklist/replay cache.
+
+---
+
+# Module 5: Human-in-the-Loop (Approval Gates)
+
+## 1. Problem kya tha
+
+| # | Problem | Asar |
+|---|---|---|
+| 1 | Screener "reject" bolta tha to sirf `needs_human_review: true` **flag** response mein jaata tha. Graph rukta nahi tha | Flag ignore ho sakta tha; AI ka reject hi effectively final tha. Kisi ki career par asar wala decision bina insaan ke |
+| 2 | Scheduler sirf slots **propose** karta tha, book ya email kuch nahi karta tha | Copilot asli kaam nahi kar sakta tha. Aur agar booking/email add karte bina approval ke, to AI candidate ko khud email bhej deta |
+| 3 | Existing `interview/public/book-slot` route mein `isBooked` check aur update **atomic nahi** hain | Do log ek saath ek hi slot book kar sakte hain (race condition). **Is module mein us route ko nahi chheda**, sirf naye Copilot booking ko atomic banaya |
+
+---
+
+## 2. LangGraph `interrupt()`: experiment se kya pata chala
+
+Implement karne se pehle `langgraph 0.3.34` par ek chhota probe chalaya:
+
+| Behaviour | Design par asar |
+|---|---|
+| Interrupt par `ainvoke()` koi marker return **nahi** karta | Pending approval `aget_state()` snapshot ke `tasks[].interrupts` se padha jaata hai (`_pending_approval`) |
+| Resume par node **shuru se dobara** chalta hai | `interrupt()` se pehle ka code side-effect free hai. Booking/email graph ke **bahar**, approval ke baad hote hain |
+| Pending approval ke dauraan naya message → LangGraph **purana approval chupchaap discard** karke naya run shuru karta hai | `/orchestrate` pending approval par **409** deta hai; UI input band kar deta hai |
+| `interrupt()` ko checkpointer chahiye | Gates sirf checkpointed (multi-turn) graph mein; stateless mode pehle jaisa (sirf flag) |
+
+---
+
+## 3. Backend
+
+### Orchestrator graph (checkpointer ke saath)
+```
+resume_screening → [review_rejection] → finalize    ← AI "reject" → interrupt(confirm_rejection)
+scheduling       → [approve_booking]  → finalize    ← bookable slot + candidate email → interrupt(book_interview)
+```
+
+| Gate | Kab rukta hai | Recruiter ka jawab | Result |
+|---|---|---|---|
+| `review_rejection` | Screening decision `reject` ho | `reject` / `maybe` / `shortlist` + note | Report mein `screeningDecision` update + `humanReview: {aiDecision, decision, note, reviewer}`. Human ne decide kiya to `needs_human_review` false. Reply: "Recruiter changed the AI's REJECT to MAYBE." |
+| `approve_booking` | Proposed slots **asli `InterviewSlot` rows** hon (`calendar_source == db_slots`) **aur** candidate email ho | `approved` + `slot_id` + editable `message`, ya decline | `scheduler_result.action = {status: approved/declined, slot_id, starts_at, candidate_email, message, reviewer}` |
+
+Generated (fake) slots ya bina email ke koi gate nahi, kyunki tab book karne ko kuch hai hi nahi.
+
+### API (`main.py`)
+| Endpoint | Kya |
+|---|---|
+| `POST /orchestrate` | Pending approval ho to **409**. Run gate par ruke to `status: "awaiting_approval"` + `approval` payload + prompt reply; warna `status: "completed"` |
+| `POST /threads/{id}/resume` (naya) | Recruiter ka jawab. Checks: kuch pending ho (warna 409), `type` match kare (400), zaroori fields hon (400), **`slot_id` sirf offered slots mein se** ho (400; forged slot ID reject). Phir `Command(resume=answer)` se run poora; `reviewer` = token ka user |
+| `GET /threads/{id}` | `pending_approval` bhi deta hai (reload par approval card wapas aaye) |
+| Langfuse | Har decision par `human-approval` guardrail event + score `human_override` (1 = recruiter ne AI ki baat badli). Isse **override rate** track ho sakta hai, jo AI quality ka accha signal hai |
+
+---
+
+## 4. Frontend
+
+| File | Kya |
+|---|---|
+| `app/api/recruiter-copilot/[threadId]/resume/route.ts` (naya) | zod discriminated union se validation. Booking approve se **pehle** check: slot free hai, future mein hai, is recruiter ke campaign ka hai (warna 409, approval record hi nahi hota). Agent run poora hone ke baad: **atomic booking** `updateMany({where: {id, isBooked: false, startsAt > now, campaign.userId}})` → `count === 1` hi success (double-booking impossible). Phir `sendHREmail` se candidate ko confirmation (recruiter ke naam aur reply-to ke saath). SMTP na ho ya email fail ho to booking rehti hai aur UI ko saaf message jaata hai |
+| `app/(dashboard)/recruiter-copilot/approval-card.tsx` (naya) | **Reject gate:** reasons + red flags, note, buttons "Confirm reject" / "Change to maybe" / "Shortlist instead". **Booking gate:** slot radio list, editable email message, "Approve & send" / "Don't book" |
+| `page.tsx` | `pending` state; approval ke dauraan input disabled ("Answer the approval above to continue"); reload par `pending_approval` restore; booking result chat mein ("✅ Booked for … — confirmation email sent." ya warning) |
+
+---
+
+## 5. Verification
+
+**Unit tests** `tests/test_hitl.py`, 9 naye tests (total **50 passed**):
+- AI reject → `awaiting_approval`; thread reopen par `pending_approval` dikhta hai
+- Override (`maybe` + note) → report mein `humanReview`, `needs_human_review: false`, sahi reply
+- Pending ke dauraan naya message → **409**
+- Galat `type` → 400; `decision` missing → 400; kuch pending nahi → 409
+- **Doosra user** kisi aur ka approval answer nahi kar sakta (uske namespace mein paused run hai hi nahi → 409)
+- Booking: sirf offered slots; **forged `slot_id` → 400**; approve → `action.slot_id` + edited message; decline → "nothing was booked"
+- Candidate email na ho to gate nahi lagta
+
+**Postgres (asli local DB):** run `review_rejection` par ruka → checkpointer band kiya (restart) → naya pool → `Command(resume=shortlist)` → run poora (`next: ()`). **Pause restart ke baad bhi bacha rehta hai.**
+
+`npx tsc --noEmit` aur ESLint (naye files) clean. **Booking + email wala Next.js route aur approval UI browser mein test nahi hue** (recruiter login aur SMTP chahiye).
+
+---
+
+## 6. Trade-offs aur jo baaki hai
+
+| Point | Detail |
+|---|---|
+| Approval aur booking do steps hain | Agent "approved" record karta hai, phir Next.js book karta hai. Beech mein slot chala jaaye to UI "Slot was taken" dikhata hai, lekin thread history mein "Approved — booking…" reh jaata hai. Fix: booking ke baad result agent ko wapas bhejna (ek aur graph step) |
+| Approval expiry nahi | Pending approval hamesha ke liye ruka reh sakta hai. Next step: X ghante baad auto-decline / reminder |
+| Approvals ki list nahi | Approval sirf us conversation ke andar dikhta hai. Ek "Pending approvals" inbox (saare threads) agla UX step |
+| Purana `public/book-slot` race | Wahan bhi wahi atomic `updateMany` pattern lagana chahiye (alag chhota fix) |
+| Low-faithfulness FAQ | Abhi bhi sirf flag hai, gate nahi; answer read-only hai, isliye flag kaafi hai |
+
+---
+
+## 7. Interview mein kaise bolna hai
+
+> "Human-in-the-loop ko maine sirf ek flag nahi rehne diya, graph sach mein rukta hai. LangGraph `interrupt()` ke saath do gates hain: AI ka 'reject' tab tak final nahi hota jab tak recruiter confirm ya override na kare, aur interview booking + candidate email bina approval ke nahi hota. Paused state Postgres checkpointer mein hoti hai, to server restart ke baad bhi approval wahin se continue hota hai. Implement karne se pehle maine framework ka behaviour probe kiya. Resume par node dobara chalta hai, isliye side effects (booking, email) graph ke bahar approval ke baad hote hain. Aur pending approval par naya message purana approval chupchaap discard kar deta, isliye API 409 deta hai. Security: recruiter sirf offered slots mein se chun sakta hai, approval token ke user se bound hai, aur booking atomic `updateMany` hai, to double-booking nahi ho sakti. Har decision Langfuse mein `human_override` score ke saath jaata hai, jisse pata chalta hai ki recruiters AI se kitni baar asehmat hote hain."
+
+**Follow-up sawaal:**
+- *"HITL kab zaroori hai?"* Jab action irreversible ho (email gaya to gaya), kisi insaan par asar ho (reject), ya external ho. Read-only answers par flag kaafi hai, gate nahi.
+- *"Approval ke beech server restart ho jaaye?"* Interrupt checkpoint ke saath Postgres mein save hai. Maine restart simulate karke verify kiya ki resume kaam karta hai.
+- *"Agent khud email kyun nahi bhejta approval ke baad?"* DB aur mailer Next.js mein hain, aur side effect graph node mein hota to resume par dobara chal sakta tha. Isliye agent decision record karta hai, aur execution ek jagah atomic tarike se hota hai.

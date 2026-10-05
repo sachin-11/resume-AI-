@@ -2,11 +2,17 @@
 Recruitment Copilot Orchestrator — Graph
 
 [START] → [classify_intent] →(route)→ [resume_screener | scheduler | faq | other] → [finalize] → [END]
+
+With a checkpointer, two human-in-the-loop gates are added:
+  resume_screening → [review_rejection] → finalize   (AI "reject" needs recruiter confirmation)
+  scheduling       → [approve_booking]  → finalize   (booking + candidate email needs approval)
 """
 from langgraph.graph import StateGraph, END
 from agents.orchestrator.state import OrchestratorState
 from agents.orchestrator.nodes import (
+    approve_booking,
     classify_intent,
+    review_rejection,
     run_resume_screener,
     run_scheduler,
     run_faq_answerer,
@@ -20,8 +26,13 @@ def route_by_intent(state: OrchestratorState) -> str:
 
 
 def build_orchestrator_agent(checkpointer=None):
-    """Compile the orchestrator. Pass a checkpointer for multi-turn (thread) memory."""
+    """Compile the orchestrator. Pass a checkpointer for multi-turn (thread) memory.
+
+    The human-review gates need a checkpointer (interrupt() persists the paused
+    run), so the stateless build skips them and only flags rejects for review.
+    """
     workflow = StateGraph(OrchestratorState)
+    human_gates = checkpointer is not None
 
     workflow.add_node("classify_intent", classify_intent)
     workflow.add_node("resume_screening", run_resume_screener)
@@ -43,8 +54,16 @@ def build_orchestrator_agent(checkpointer=None):
         },
     )
 
-    workflow.add_edge("resume_screening", "finalize")
-    workflow.add_edge("scheduling", "finalize")
+    if human_gates:
+        workflow.add_node("review_rejection", review_rejection)
+        workflow.add_node("approve_booking", approve_booking)
+        workflow.add_edge("resume_screening", "review_rejection")
+        workflow.add_edge("review_rejection", "finalize")
+        workflow.add_edge("scheduling", "approve_booking")
+        workflow.add_edge("approve_booking", "finalize")
+    else:
+        workflow.add_edge("resume_screening", "finalize")
+        workflow.add_edge("scheduling", "finalize")
     workflow.add_edge("faq", "finalize")
     workflow.add_edge("other", "finalize")
     workflow.add_edge("finalize", END)

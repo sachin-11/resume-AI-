@@ -11,17 +11,19 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
 load_dotenv()
 
 from core import memory
 from core.auth import Caller, get_caller, resolve_user_id
+from core.observability import trace_guardrail
 from core.observability import RequestIdLogFilter, flush as flush_traces, new_request_id, request_id_var, run_agent
 
 _log_handler = logging.StreamHandler()
@@ -701,8 +703,12 @@ async def orchestrate(
     thread = _thread_or_400(user_id, thread_id)
     copilot = app.state.copilot
 
-    # `logs` is append-only across the thread; return only this turn's lines.
     previous = await copilot.aget_state({"configurable": {"thread_id": thread}})
+    # A new message would silently discard the paused run (LangGraph starts over),
+    # so the recruiter must answer the pending approval first.
+    if _pending_approval(previous):
+        raise HTTPException(status_code=409, detail="This conversation is waiting for your approval — approve or decline it first.")
+    # `logs` is append-only across the thread; return only this turn's lines.
     logs_before = len(previous.values.get("logs", [])) if previous.values else 0
     if not previous.values:
         turn_state.setdefault("existing_slots", [])
@@ -710,16 +716,104 @@ async def orchestrate(
     final_state, usage = await run_agent(
         "orchestrate", copilot, turn_state, user_id=user_id, thread=thread,
     )
+    return await _turn_response(copilot, thread, thread_id, final_state, usage, logs_before)
 
-    return {
+
+def _pending_approval(snapshot) -> Optional[dict]:
+    """The interrupt payload a paused thread is waiting on, if any."""
+    for task in snapshot.tasks or ():
+        for pending in task.interrupts:
+            return pending.value
+    return None
+
+
+def _approval_prompt(approval: dict) -> str:
+    if approval["type"] == "confirm_rejection":
+        return (f"The screener recommends REJECTING {approval['candidate_name']} "
+                f"(rating {approval.get('rating', '?')}/100). Please confirm or change the decision.")
+    return f"Ready to book {approval['candidate_name']} — pick a slot and approve the confirmation email."
+
+
+async def _turn_response(copilot, thread: str, thread_id: str, final_state: dict, usage: dict, logs_before: int) -> dict:
+    """Response for a completed turn, or for one paused at a human-approval gate."""
+    snapshot = await copilot.aget_state({"configurable": {"thread_id": thread}})
+    approval = _pending_approval(snapshot)
+    base = {
         "success": True,
         "thread_id": thread_id,
         "memory": memory.backend,
         "usage": usage,
-        **final_state.get("final_response", {}),
-        "reply": final_state["messages"][-1].content if final_state.get("messages") else "",
         "logs": final_state.get("logs", [])[logs_before:],
     }
+    if approval:
+        return {
+            **base,
+            "status": "awaiting_approval",
+            "intent": final_state.get("intent"),
+            "approval": approval,
+            "reply": _approval_prompt(approval),
+        }
+    return {
+        **base,
+        "status": "completed",
+        **final_state.get("final_response", {}),
+        "reply": final_state["messages"][-1].content if final_state.get("messages") else "",
+    }
+
+
+class ResumeRequest(BaseModel):
+    """The recruiter's answer to a pending approval."""
+    type: Literal["confirm_rejection", "book_interview"]
+    user_id: Optional[str] = None
+    # confirm_rejection
+    decision: Optional[Literal["reject", "maybe", "shortlist"]] = None
+    note: str = Field(default="", max_length=1000)
+    # book_interview
+    approved: Optional[bool] = None
+    slot_id: Optional[str] = None
+    message: str = Field(default="", max_length=3000)
+
+
+@app.post("/threads/{thread_id}/resume")
+async def resume_thread(thread_id: str, request: ResumeRequest, caller: Caller = Depends(get_caller)):
+    """Answer a pending human-approval gate and let the paused run finish."""
+    user_id = resolve_user_id(caller, request.user_id)
+    thread = _thread_or_400(user_id, thread_id)
+    copilot = app.state.copilot
+
+    previous = await copilot.aget_state({"configurable": {"thread_id": thread}})
+    approval = _pending_approval(previous)
+    if not approval:
+        raise HTTPException(status_code=409, detail="Nothing is waiting for approval in this conversation.")
+    if approval["type"] != request.type:
+        raise HTTPException(status_code=400, detail=f"Pending approval is '{approval['type']}', not '{request.type}'.")
+
+    if request.type == "confirm_rejection":
+        if request.decision is None:
+            raise HTTPException(status_code=400, detail="decision is required")
+        answer = {"decision": request.decision, "note": request.note, "reviewer": user_id}
+        override = request.decision != "reject"
+    else:
+        if request.approved is None:
+            raise HTTPException(status_code=400, detail="approved is required")
+        offered = {s["slotId"] for s in approval.get("slots", [])}
+        if request.approved and request.slot_id not in offered:
+            raise HTTPException(status_code=400, detail="slot_id must be one of the proposed slots")
+        answer = {"approved": request.approved, "slot_id": request.slot_id, "message": request.message, "reviewer": user_id}
+        override = not request.approved
+
+    trace_guardrail(
+        name="human-approval",
+        input_data={"type": request.type},
+        output_data=answer,
+        scores={"human_override": 1.0 if override else 0.0},
+    )
+
+    logs_before = len(previous.values.get("logs", []))
+    final_state, usage = await run_agent(
+        "orchestrate-resume", copilot, Command(resume=answer), user_id=user_id, thread=thread,
+    )
+    return await _turn_response(copilot, thread, thread_id, final_state, usage, logs_before)
 
 
 @app.get("/threads/{thread_id}")
@@ -741,6 +835,7 @@ async def get_thread(thread_id: str, user_id: Optional[str] = None, caller: Call
             "has_job_description": bool(values.get("job_description")),
             "candidate_name": values.get("candidate_name"),
         },
+        "pending_approval": _pending_approval(snapshot),
     }
 
 

@@ -1,10 +1,11 @@
 """
 Recruitment Copilot Orchestrator — Nodes
 """
-from typing import Literal
+from typing import Literal, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel
+from langgraph.types import interrupt
+from pydantic import BaseModel, Field
 
 from agents.shared.llm import get_llm
 from agents.shared.observability import trace_guardrail
@@ -194,6 +195,90 @@ async def run_other(state: dict) -> dict:
     }
 
 
+# ── Human-in-the-loop gates ──────────────────────────────────────
+# interrupt() pauses the graph — state is checkpointed — until the API resumes it
+# with the recruiter's answer (POST /threads/{id}/resume). On resume LangGraph
+# re-runs the node from the top, so nothing before interrupt() may have side
+# effects. The booking itself happens outside the graph, after approval.
+
+class RejectionReview(BaseModel):
+    decision: Literal["reject", "maybe", "shortlist"]
+    note: str = Field(default="", max_length=1000)
+    reviewer: Optional[str] = None
+
+
+class BookingReview(BaseModel):
+    approved: bool
+    slot_id: Optional[str] = None
+    message: str = Field(default="", max_length=3000)
+    reviewer: Optional[str] = None
+
+
+def bookable_slots(scheduler_result: dict) -> list:
+    """Proposed slots that are real InterviewSlot rows (generated suggestions can't be booked)."""
+    if scheduler_result.get("calendar_source") != "db_slots":
+        return []
+    return [s for s in scheduler_result.get("proposed_slots", []) if s.get("slotId")]
+
+
+def review_rejection(state: dict) -> dict:
+    """Gate: an AI "reject" is never final until a recruiter confirms or overrides it."""
+    result = state.get("resume_screener_result") or {}
+    report = result.get("report") or {}
+    if report.get("screeningDecision") != "reject":
+        return {}
+
+    answer = RejectionReview.model_validate(interrupt({
+        "type": "confirm_rejection",
+        "candidate_name": report.get("candidateName") or "the candidate",
+        "rating": report.get("overallRating"),
+        "reasons": report.get("decisionReasons", []),
+        "red_flags": report.get("redFlags", []),
+        "options": ["reject", "maybe", "shortlist"],
+    }))
+
+    human_review = {"aiDecision": "reject", "decision": answer.decision, "note": answer.note, "reviewer": answer.reviewer}
+    overridden = answer.decision != "reject"
+    return {
+        "resume_screener_result": {**result, "report": {**report, "screeningDecision": answer.decision, "humanReview": human_review}},
+        "logs": [f"👤 Recruiter {'overrode' if overridden else 'confirmed'} AI reject → {answer.decision.upper()}"],
+    }
+
+
+def approve_booking(state: dict) -> dict:
+    """Gate: booking a slot and emailing the candidate needs explicit recruiter approval."""
+    result = state.get("scheduler_result") or {}
+    slots = bookable_slots(result)
+    email = state.get("candidate_email")
+    if not slots or not email:
+        return {}
+
+    answer = BookingReview.model_validate(interrupt({
+        "type": "book_interview",
+        "candidate_name": state.get("candidate_name") or "the candidate",
+        "candidate_email": email,
+        "slots": slots,
+        "message": result.get("confirmation_message", ""),
+    }))
+
+    chosen = next((s for s in slots if s["slotId"] == answer.slot_id), None)
+    approved = answer.approved and chosen is not None
+    action = {
+        "type": "book_interview",
+        "status": "approved" if approved else "declined",
+        "slot_id": chosen["slotId"] if approved else None,
+        "starts_at": chosen.get("startsAt") if approved else None,
+        "candidate_name": state.get("candidate_name"),
+        "candidate_email": email,
+        "message": (answer.message or result.get("confirmation_message", "")) if approved else "",
+        "reviewer": answer.reviewer,
+    }
+    return {
+        "scheduler_result": {**result, "action": action},
+        "logs": [f"👤 Recruiter {'approved booking' if approved else 'declined booking'}"],
+    }
+
+
 def _reply_text(intent: str, result: dict) -> str:
     """The assistant turn stored in conversation history (and shown in the chat)."""
     if result.get("status") == "missing_input":
@@ -202,12 +287,23 @@ def _reply_text(intent: str, result: dict) -> str:
         r = result.get("report", {})
         name = r.get("candidateName") or "the candidate"
         lines = [f"Screening for {name}: {str(r.get('screeningDecision', 'maybe')).upper()} — rating {r.get('overallRating', '?')}/100."]
+        review = r.get("humanReview")
+        if review:
+            lines.append(
+                "Recruiter confirmed the AI's reject." if review["decision"] == "reject"
+                else f"Recruiter changed the AI's REJECT to {review['decision'].upper()}."
+            )
         if r.get("matchedSkills"):
             lines.append(f"Matched: {', '.join(r['matchedSkills'][:8])}")
         if r.get("missingSkills"):
             lines.append(f"Missing: {', '.join(r['missingSkills'][:8])}")
         return "\n".join(lines)
     if intent == "scheduling":
+        action = result.get("action") or {}
+        if action.get("status") == "approved":
+            return f"Approved — booking {action.get('candidate_name') or 'the candidate'} for {action.get('starts_at')} and emailing {action.get('candidate_email')}."
+        if action.get("status") == "declined":
+            return "Okay — nothing was booked and no email was sent."
         return result.get("confirmation_message") or "I couldn't find any interview slots to propose."
     if intent == "faq":
         return result.get("answer", "")
@@ -238,7 +334,7 @@ def finalize(state: dict) -> dict:
         if report.get("aiFallback"):
             needs_review = True
             reasons.append("Screening AI reply was invalid — decision is a default, not an AI judgement")
-        if decision == "reject":
+        if decision == "reject" and not report.get("humanReview"):
             needs_review = True
             reasons.append("Agent recommended reject — flagged for human confirmation")
         elif result.get("status") == "missing_input":

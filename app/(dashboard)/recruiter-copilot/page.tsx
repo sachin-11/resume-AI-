@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ApprovalCard, type Approval, type ApprovalAnswer } from "./approval-card";
 
 // ── Types ────────────────────────────────────────────────────────
 interface Slot { startsAt: string; durationMin?: number }
@@ -78,6 +79,9 @@ function writeThreadId(id: string | null) {
 
 interface CopilotResponse {
   thread_id?: string;
+  status?: "completed" | "awaiting_approval";
+  approval?: Approval;
+  booking?: { booked: boolean; emailSent: boolean; scheduledAt?: string; error?: string };
   reply?: string;
   intent?: string;
   needs_human_review?: boolean;
@@ -102,6 +106,9 @@ export default function RecruiterCopilotPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // A paused run waiting on the recruiter (human-in-the-loop gate).
+  const [pending, setPending] = useState<Approval | null>(null);
+  const [answering, setAnswering] = useState(false);
 
   const [showContext, setShowContext] = useState(true);
   const [context, setContext] = useState<ContextForm>(EMPTY_CONTEXT);
@@ -122,6 +129,7 @@ export default function RecruiterCopilotPage() {
         if (!d.exists) { writeThreadId(null); return; }
         setThreadId(saved);
         setRemembered(d.context);
+        setPending(d.pending_approval ?? null);
         setShowContext(false);
         setMessages([
           WELCOME,
@@ -135,7 +143,7 @@ export default function RecruiterCopilotPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, pending]);
 
   function changedContext() {
     const out: Partial<ContextForm> = {};
@@ -147,7 +155,7 @@ export default function RecruiterCopilotPage() {
   }
 
   async function sendMessage(text: string) {
-    if (text.trim().length < 3 || loading) return;
+    if (text.trim().length < 3 || loading || pending) return;
     setError("");
     setMessages((p) => [...p, { id: `u-${Date.now()}`, role: "user", content: text.trim() }]);
     setInput("");
@@ -173,6 +181,7 @@ export default function RecruiterCopilotPage() {
         has_job_description: Boolean(r?.has_job_description || ctx.jobDescription),
         candidate_name: ctx.candidateName ?? r?.candidate_name ?? null,
       }));
+      setPending(data.status === "awaiting_approval" ? data.approval ?? null : null);
       setMessages((p) => [...p, {
         id: `a-${Date.now()}`, role: "assistant", content: data.reply || "(no reply)", meta: metaFrom(data),
       }]);
@@ -183,7 +192,36 @@ export default function RecruiterCopilotPage() {
     }
   }
 
+  async function answerApproval(answer: ApprovalAnswer) {
+    if (!threadId) return;
+    setAnswering(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/recruiter-copilot/${threadId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(answer),
+      });
+      const data: CopilotResponse = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not submit your decision");
+
+      setPending(data.status === "awaiting_approval" ? data.approval ?? null : null);
+      const booking = data.booking;
+      const bookingLine = !booking ? ""
+        : booking.error ? `\n\n⚠️ ${booking.error}`
+        : `\n\n✅ Booked for ${booking.scheduledAt}${booking.emailSent ? " — confirmation email sent." : "."}`;
+      setMessages((p) => [...p, {
+        id: `a-${Date.now()}`, role: "assistant", content: (data.reply || "(no reply)") + bookingLine, meta: metaFrom(data),
+      }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not submit your decision");
+    } finally {
+      setAnswering(false);
+    }
+  }
+
   function newConversation() {
+    setPending(null);
     setThreadId(null);
     writeThreadId(null);
     setMessages([WELCOME]);
@@ -365,6 +403,7 @@ export default function RecruiterCopilotPage() {
             </div>
           </div>
         )}
+        {pending && <ApprovalCard key={JSON.stringify(pending)} approval={pending} busy={answering} onAnswer={answerApproval} />}
         <div ref={bottomRef} />
       </div>
 
@@ -388,14 +427,14 @@ export default function RecruiterCopilotPage() {
       <div className="shrink-0 pt-3 border-t border-border">
         <div className="flex gap-2 items-end">
           <Textarea
-            placeholder="Ask the copilot — e.g. “screen this candidate”, “book her for Tuesday”"
+            placeholder={pending ? "Answer the approval above to continue" : "Ask the copilot — e.g. “screen this candidate”, “book her for Tuesday”"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
             className="min-h-[52px] max-h-[120px] resize-none"
-            disabled={loading}
+            disabled={loading || Boolean(pending)}
           />
-          <Button onClick={() => sendMessage(input)} disabled={input.trim().length < 3 || loading}
+          <Button onClick={() => sendMessage(input)} disabled={input.trim().length < 3 || loading || Boolean(pending)}
             size="icon" className="h-[52px] w-12 shrink-0">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
