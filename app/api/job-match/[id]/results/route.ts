@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { toRanked } from "@/lib/bulkScreening";
 
 export async function GET(
   _req: NextRequest,
@@ -23,21 +24,9 @@ export async function GET(
 
   const matches = await db.resumeMatch.findMany({
     where: { jobDescriptionId: jdId },
-    orderBy: { score: "desc" },
     include: { resume: { select: { fileName: true, createdAt: true } } },
   });
-
-  const ranked = matches.map((m, idx) => ({
-    rank: idx + 1,
-    resumeId: m.resumeId,
-    fileName: m.resume.fileName,
-    score: m.score,
-    matchedSkills: m.matchedSkills,
-    missingSkills: m.missingSkills,
-    summary: m.summary,
-    recommendation: m.recommendation,
-    analyzedAt: m.createdAt,
-  }));
+  const ranked = toRanked(matches);
 
   return NextResponse.json({ jobDescription: jd, ranked });
 }

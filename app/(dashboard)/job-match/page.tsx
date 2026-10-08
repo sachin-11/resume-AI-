@@ -6,6 +6,7 @@ import {
   Settings2, Upload, FileText, X, FolderArchive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { runAgentJob } from "@/lib/agentJobClient";
 
 // ── Types ────────────────────────────────────────────────────────
 interface JobDescription {
@@ -18,6 +19,11 @@ interface RankedCandidate {
   matchedSkills: string[]; missingSkills: string[];
   summary: string;
   recommendation: "strong_match" | "good_match" | "partial_match" | "weak_match";
+  reviewReasons?: string[];   // non-empty → never auto-shortlisted
+}
+interface ShortlistPreview {
+  eligible: { resumeId: string; fileName: string; score: number; email: string | null }[];
+  needsReview: { resumeId: string; fileName: string; score: number; email: string | null; reviewReasons: string[] }[];
 }
 interface Campaign { id: string; title: string; role: string; }
 interface ShortlistSummary {
@@ -51,17 +57,15 @@ function ScoreRing({ score }: { score: number }) {
 
 // ── Bulk Upload Zone ─────────────────────────────────────────────
 function BulkUploadZone({
-  selectedJd,
   onUploadComplete,
 }: {
-  selectedJd: JobDescription | null;
   onUploadComplete: () => void;
 }) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [summary, setSummary] = useState<{ uploaded: number; failed: number; matched: boolean } | null>(null);
+  const [summary, setSummary] = useState<{ uploaded: number; failed: number } | null>(null);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const zipRef = useRef<HTMLInputElement>(null);
@@ -94,7 +98,6 @@ function BulkUploadZone({
 
     directFiles.forEach((f) => fd.append("files", f.file));
     if (zipFiles.length > 0) fd.append("zip", zipFiles[0].file);
-    if (selectedJd) fd.append("jobDescriptionId", selectedJd.id);
 
     setProgress(30);
     const res = await fetch("/api/resume/bulk-upload", { method: "POST", body: fd });
@@ -105,7 +108,7 @@ function BulkUploadZone({
     if (!res.ok) { setError(data.error ?? "Upload failed"); return; }
 
     setFiles((prev) => prev.map((f) => ({ ...f, status: "done" as const })));
-    setSummary({ uploaded: data.uploaded, failed: data.failed, matched: data.matched });
+    setSummary({ uploaded: data.uploaded, failed: data.failed });
     if (data.uploaded > 0) onUploadComplete();
   }
 
@@ -200,7 +203,7 @@ function BulkUploadZone({
           </p>
           <p className="text-muted-foreground">
             {summary.uploaded} uploaded{summary.failed > 0 ? `, ${summary.failed} failed` : ""}
-            {summary.matched ? " · AI matching done" : ""}
+            {summary.uploaded > 0 ? " · AI screening started" : ""}
           </p>
         </div>
       )}
@@ -208,7 +211,7 @@ function BulkUploadZone({
       {files.length > 0 && !uploading && summary === null && (
         <Button onClick={handleUpload} className="w-full gap-2" disabled={uploading}>
           <Zap className="h-4 w-4" />
-          Upload & {selectedJd ? "Match Against JD" : "Save"} ({files.filter(f => f.status === "pending").length} files)
+          Upload & Screen Against JD ({files.filter(f => f.status === "pending").length} files)
         </Button>
       )}
     </div>
@@ -229,6 +232,7 @@ export default function JobMatchPage() {
   const [ranked, setRanked] = useState<RankedCandidate[]>([]);
   const [matching, setMatching] = useState(false);
   const [matchError, setMatchError] = useState("");
+  const [matchStep, setMatchStep] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Auto-shortlist
@@ -241,6 +245,9 @@ export default function JobMatchPage() {
   const [shortlisting, setShortlisting] = useState(false);
   const [shortlistResult, setShortlistResult] = useState<ShortlistSummary | null>(null);
   const [shortlistError, setShortlistError] = useState("");
+  // Two-step shortlist: preview → recruiter picks → confirm (only then emails/invites/webhooks)
+  const [preview, setPreview] = useState<ShortlistPreview | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   // Active tab: "upload" | "results"
   const [tab, setTab] = useState<"upload" | "results">("upload");
@@ -275,18 +282,31 @@ export default function JobMatchPage() {
   }
 
   async function runMatch(jd: JobDescription) {
-    setSelectedJd(jd); setRanked([]); setMatchError(""); setShortlistResult(null);
-    setMatching(true); setTab("results");
-    const res = await fetch(`/api/job-match/${jd.id}/match`, { method: "POST" });
-    const data = await res.json();
-    setMatching(false);
-    if (!res.ok) { setMatchError(data.error ?? "Matching failed"); return; }
-    setRanked(data.ranked ?? []);
-    fetchJds();
+    setSelectedJd(jd); setRanked([]); setMatchError(""); setShortlistResult(null); setPreview(null);
+    setMatching(true); setMatchStep(null); setTab("results");
+    try {
+      const job = await runAgentJob(
+        () => fetch(`/api/job-match/${jd.id}/match`, { method: "POST" }),
+        (label) => setMatchStep(label),
+      );
+      if (job.status === "failed") throw new Error(job.error ?? "Screening failed");
+      const res = await fetch(`/api/job-match/${jd.id}/match/save`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Couldn't save the results");
+      setRanked(data.ranked ?? []);
+      fetchJds();
+    } catch (err) {
+      setMatchError(err instanceof Error ? err.message : "Screening failed");
+    } finally {
+      setMatching(false); setMatchStep(null);
+    }
   }
 
   async function loadResults(jd: JobDescription) {
-    setSelectedJd(jd); setRanked([]); setMatchError(""); setShortlistResult(null);
+    setSelectedJd(jd); setRanked([]); setMatchError(""); setShortlistResult(null); setPreview(null);
     setMatching(true); setTab("results");
     const res = await fetch(`/api/job-match/${jd.id}/results`);
     const data = await res.json();
@@ -295,13 +315,27 @@ export default function JobMatchPage() {
     setRanked(data.ranked ?? []);
   }
 
-  async function runAutoShortlist() {
+  async function previewAutoShortlist() {
     if (!selectedJd) return;
+    setShortlisting(true); setShortlistResult(null); setShortlistError(""); setPreview(null);
+    const res = await fetch(`/api/job-match/${selectedJd.id}/auto-shortlist`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dryRun: true, threshold }),
+    });
+    const data = await res.json();
+    setShortlisting(false);
+    if (!res.ok) { setShortlistError(data.error ?? "Preview failed"); return; }
+    setPreview(data);
+    setPicked(new Set((data as ShortlistPreview).eligible.map((c) => c.resumeId)));   // review cases stay unticked
+  }
+
+  async function confirmAutoShortlist() {
+    if (!selectedJd || picked.size === 0) return;
     setShortlisting(true); setShortlistResult(null); setShortlistError("");
     const res = await fetch(`/api/job-match/${selectedJd.id}/auto-shortlist`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        threshold, companyName: companyName || selectedJd.company || "Our Company",
+        resumeIds: [...picked], companyName: companyName || selectedJd.company || "Our Company",
         sendEmails, fireWebhooks, campaignId: selectedCampaignId || undefined,
       }),
     });
@@ -309,9 +343,19 @@ export default function JobMatchPage() {
     setShortlisting(false);
     if (!res.ok) { setShortlistError(data.error ?? "Auto-shortlist failed"); return; }
     setShortlistResult(data);
+    setPreview(null);
   }
 
-  const aboveThreshold = ranked.filter((c) => c.score >= threshold).length;
+  function togglePick(id: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const needsReview = (c: RankedCandidate) => (c.reviewReasons?.length ?? 0) > 0;
+  const aboveThreshold = ranked.filter((c) => c.score >= threshold && !needsReview(c)).length;
 
   return (
     <div className="space-y-6">
@@ -442,8 +486,7 @@ export default function JobMatchPage() {
                     )}
                   </div>
                   <BulkUploadZone
-                    selectedJd={selectedJd}
-                    onUploadComplete={() => { fetchJds(); loadResults(selectedJd); }}
+                    onUploadComplete={() => { fetchJds(); runMatch(selectedJd); }}
                   />
                 </div>
               )}
@@ -454,7 +497,7 @@ export default function JobMatchPage() {
                   {matching && (
                     <div className="rounded-xl border border-border bg-card p-8 flex flex-col items-center gap-3 text-muted-foreground text-sm">
                       <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
-                      <p>AI is analyzing resumes...</p>
+                      <p>{matchStep ? `${matchStep}…` : "Starting AI screening…"}</p>
                     </div>
                   )}
                   {matchError && (
@@ -520,9 +563,39 @@ export default function JobMatchPage() {
                             </div>
                           )}
                           {shortlistError && <p className="text-red-400 text-sm flex items-center gap-1"><AlertCircle className="h-4 w-4" />{shortlistError}</p>}
-                          <Button onClick={runAutoShortlist} disabled={shortlisting || aboveThreshold === 0} className="w-full gap-2 bg-violet-600 hover:bg-violet-700">
-                            {shortlisting ? <><Loader2 className="h-4 w-4 animate-spin" /> Running...</> : <><Sparkles className="h-4 w-4" /> Shortlist {aboveThreshold} Candidate{aboveThreshold !== 1 ? "s" : ""}</>}
-                          </Button>
+                          {!preview && (
+                            <Button onClick={previewAutoShortlist} disabled={shortlisting || ranked.length === 0} className="w-full gap-2 bg-violet-600 hover:bg-violet-700">
+                              {shortlisting ? <><Loader2 className="h-4 w-4 animate-spin" /> Loading...</> : <><Sparkles className="h-4 w-4" /> Preview shortlist ({aboveThreshold} qualify)</>}
+                            </Button>
+                          )}
+                          {preview && (
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">
+                                Review who gets the shortlist email{selectedCampaignId ? ", campaign invite" : ""} and webhook. Nothing is sent until you confirm.
+                              </p>
+                              {[...preview.eligible.map((c) => ({ ...c, reviewReasons: [] as string[] })), ...preview.needsReview].map((c) => (
+                                <label key={c.resumeId} className={`flex items-start gap-2 rounded-lg border p-2 text-sm cursor-pointer ${c.reviewReasons.length ? "border-yellow-500/30 bg-yellow-500/5" : "border-border"}`}>
+                                  <input type="checkbox" className="mt-1 accent-violet-500" checked={picked.has(c.resumeId)} onChange={() => togglePick(c.resumeId)} />
+                                  <span className="flex-1 min-w-0">
+                                    <span className="font-medium truncate">{c.fileName}</span>
+                                    <span className="text-xs text-muted-foreground"> · {c.score} · {c.email ?? "no email found in resume"}</span>
+                                    {c.reviewReasons.length > 0 && (
+                                      <span className="block text-xs text-yellow-500">⚠ Needs review: {c.reviewReasons.join(" · ")}</span>
+                                    )}
+                                  </span>
+                                </label>
+                              ))}
+                              {preview.eligible.length + preview.needsReview.length === 0 && (
+                                <p className="text-xs text-muted-foreground">Nobody qualifies at this threshold.</p>
+                              )}
+                              <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => setPreview(null)} disabled={shortlisting} className="flex-1">Back</Button>
+                                <Button onClick={confirmAutoShortlist} disabled={shortlisting || picked.size === 0} className="flex-1 gap-2 bg-violet-600 hover:bg-violet-700">
+                                  {shortlisting ? <><Loader2 className="h-4 w-4 animate-spin" /> Running...</> : <><Sparkles className="h-4 w-4" /> Shortlist {picked.size} selected</>}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
                           {shortlistResult && (
                             <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 space-y-2">
                               <p className="text-green-400 text-sm font-semibold flex items-center gap-1"><CheckCircle2 className="h-4 w-4" /> Pipeline Complete</p>
@@ -549,14 +622,14 @@ export default function JobMatchPage() {
                   {/* Ranked list */}
                   {!matching && ranked.length === 0 && !matchError && (
                     <div className="rounded-xl border border-dashed border-border p-8 text-center text-muted-foreground text-sm">
-                      Upload resumes and click "Re-run AI Match" to see rankings.
+                      Upload resumes and click &ldquo;Re-run AI Match&rdquo; to see rankings.
                     </div>
                   )}
 
                   {!matching && ranked.map((c) => {
                     const badge = BADGE[c.recommendation] ?? BADGE.weak_match;
                     const isExpanded = expandedId === c.resumeId;
-                    const isAbove = c.score >= threshold;
+                    const isAbove = c.score >= threshold && !needsReview(c);
                     return (
                       <div key={c.resumeId} className={`rounded-xl border overflow-hidden transition-all ${isAbove ? "border-border bg-card" : "border-border/40 bg-card/50 opacity-60"}`}>
                         <div className="flex items-center gap-3 p-4 cursor-pointer hover:bg-accent/50 transition-colors"
@@ -569,6 +642,9 @@ export default function JobMatchPage() {
                             <div className="flex items-center gap-2">
                               <p className="text-sm font-medium truncate">{c.fileName}</p>
                               {isAbove && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 border border-violet-500/30 shrink-0">AUTO</span>}
+                              {needsReview(c) && (
+                                <span title={c.reviewReasons?.join(" · ")} className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-500 border border-yellow-500/30 shrink-0">NEEDS REVIEW</span>
+                              )}
                             </div>
                             <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full border mt-1 ${badge.cls}`}>{badge.label}</span>
                           </div>
@@ -576,6 +652,9 @@ export default function JobMatchPage() {
                         </div>
                         {isExpanded && (
                           <div className="border-t border-border px-4 pb-4 pt-3 space-y-3">
+                            {needsReview(c) && (
+                              <p className="text-xs text-yellow-500">⚠ {c.reviewReasons?.join(" · ")}</p>
+                            )}
                             <p className="text-sm text-muted-foreground">{c.summary}</p>
                             {c.matchedSkills.length > 0 && (
                               <div>

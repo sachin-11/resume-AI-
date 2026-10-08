@@ -79,7 +79,8 @@ Next.js chhote, tez request-response ke liye best hai. AI agents ko lamba chalna
 4. **AI Screening** → resume vs JD + candidate ka GitHub check
 5. **AI Panel** → 3 AI interviewers (Technical, HR, Domain) ek saath judge karte hain
 6. **Recruitment Copilot** → chat assistant jo kai kaam ek message mein karta hai, approval lekar
-7. **AI Hiring Committee** → campaign ke saare candidates (100 tak) ko AI parallel mein assess karta hai, ranked shortlist suggest karta hai; recruiter confirm karta hai
+7. **Bulk Resume Screening** → 50 resumes (ya ZIP) upload karo; har resume ka AI screening parallel mein, live progress ("Screening resumes (23)"); shortlist emails sirf recruiter ke select karne ke baad
+8. **AI Hiring Committee** → campaign ke saare candidates (100 tak) ko AI parallel mein assess karta hai, ranked shortlist suggest karta hai; recruiter confirm karta hai
 
 **Platform**: Login (email, Google, phone OTP), teams, Stripe billing (Free/Pro/Enterprise), admin dashboard, AI cost tracking.
 
@@ -148,7 +149,8 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 | 7 | **AI agents 1–2 minute lete the, request timeout ho jaati** | **Job queue:** request turant job ID deti hai, kaam background mein, screen par live progress |
 | 8 | **Auto-apply nakli jobs bana deta tha** (jab job API key nahi hoti) | Nakli data band. Source nahi hai to saaf message: "job search configured nahi hai" |
 | 9 | **GitHub check kabhi chala hi nahi** (galat tool naam + expired token) | Sahi tool, connection reuse (4.5s → 0.1s), aur token kharab ho to bina token try |
-| 10 | **FAQ sirf user ke exact shabdon se search karta tha** — "vacation" puchho, doc mein "leave" likha ho to jawab nahi milta | FAQ ko **ReAct** banaya: AI search query khud behtar likhta hai, zarurat ho to dobara search. Accuracy **40% → 100%**. Library step-limit par chupchaap "Sorry, need more steps" ko answer bana deti thi — woh bhi pakda aur roka |
+| 10 | **Bulk resume shortlist bina approval candidates ko email bhej deta tha**, aur alag (kamzor) matcher use karta tha — na injection check, na PII masking; email HTML mein resume ka text bina escape | Bulk screening ab wahi screening agent (map-reduce, guardrails, code decision) use karta hai; shortlist = **preview → recruiter select → tab email**; HTML escape |
+| 11 | **FAQ sirf user ke exact shabdon se search karta tha** — "vacation" puchho, doc mein "leave" likha ho to jawab nahi milta | FAQ ko **ReAct** banaya: AI search query khud behtar likhta hai, zarurat ho to dobara search. Accuracy **40% → 100%**. Library step-limit par chupchaap "Sorry, need more steps" ko answer bana deti thi — woh bhi pakda aur roka |
 
 > 🎤 **Aise bolo:** "Maine har feature ko asli data par test kiya, aur kai chhupe bugs pakde — jaise same score par alag decision (bias), slot double-booking, aur fake job listings. Har ek ka ab automated test hai."
 
@@ -166,7 +168,7 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 
 ## 9. Quality kaise ensure ki (testing)
 
-1. **112 automatic tests** — fake AI ke saath, har PR par chalte hain (GitHub Actions). Free, fast.
+1. **117 automatic tests** — fake AI ke saath, har PR par chalte hain (GitHub Actions). Free, fast.
 2. **Evals (asli AI ke saath test):** 4 cheezein check hoti hain:
    - Planner sahi steps banata hai? (16 examples)
    - Screening sahi decision deta hai? (5 clear cases)
@@ -214,7 +216,7 @@ Recruitment Copilot — multi-step plan, memory, beech mein ruk ke approval lena
 Isme flowchart jaisa control milta hai — steps, loops, beech mein rukna (approval), aur state save karna. Hiring jaise sensitive kaam mein predictable flow chahiye tha.
 
 **Q: Multi-agent kahan use kiya?**
-Teen jagah, teen patterns: (1) **Copilot** — supervisor pattern (manager + team), (2) **Interview Panel** — 3 judges parallel + vote, (3) **Hiring Committee** — map-reduce: har candidate ke liye ek agent parallel (`Send` API), phir code ranking. Live test: 8 candidates 5.4s mein (sequential ~20s). Suspicious integrity ya injection wale candidate kabhi auto-shortlist nahi hote, chahe score sabse zyada ho.
+Chaar jagah: (1) **Copilot** — supervisor pattern (manager + team), (2) **Interview Panel** — 3 judges parallel + vote, (3) **Hiring Committee** — map-reduce: har candidate ke liye ek agent parallel (`Send` API), phir code ranking, (4) **Bulk Resume Screening** — wahi map-reduce, 50 resumes par screening agent (single screening jaisa hi logic aur guardrails). Live test: 8 candidates 5.4s mein (sequential ~20s). Suspicious integrity ya injection wale candidate kabhi auto-shortlist nahi hote, chahe score sabse zyada ho.
 
 **Q: Multi-agent kahan NAHI use karte?**
 Live interview (latency), simple kaam (ek call kaafi), aur final hiring decision (code ki policy + insaan).
@@ -253,4 +255,4 @@ Purana data auto-delete (privacy), baaki lambe features ko bhi job queue par lan
 4. **Ek-do problem + solution** (section 7) — bias wala aur double-booking wala sabse strong hain
 5. Sawaal aaye to **section 6 aur 11**
 
-**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 11 AI agents · 112 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1
+**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 12 AI agents · 117 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1

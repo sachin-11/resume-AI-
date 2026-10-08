@@ -39,6 +39,8 @@ const NODE_LABELS: Record<string, string> = {
   consensus: "Panel reaching consensus",
   assess_candidate: "Assessing candidates",
   rank_candidates: "Ranking the shortlist",
+  screen_resume: "Screening resumes",
+  collect: "Ranking the results",
 };
 
 /** The latest step worth showing, e.g. "Checking GitHub" or "Assessing candidates (37)". */

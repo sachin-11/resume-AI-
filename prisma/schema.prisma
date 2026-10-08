@@ -355,6 +355,8 @@ model ResumeMatch {
   matchedSkills    String[]
   summary          String         @db.Text
   recommendation   String         // strong_match | good_match | partial_match | weak_match
+  // Non-empty = never auto-shortlisted (prompt injection, AI fallback, biased remark)
+  reviewReasons    String[]       @default([])
   createdAt        DateTime       @default(now())
   jobDescription   JobDescription @relation(fields: [jobDescriptionId], references: [id], onDelete: Cascade)
   resume           Resume         @relation(fields: [resumeId], references: [id], onDelete: Cascade)

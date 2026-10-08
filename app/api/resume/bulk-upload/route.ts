@@ -6,7 +6,7 @@
  * we process all and return a summary. Frontend polls or waits.
  *
  * Body: FormData with field "files" (multiple) or "zip" (single ZIP)
- * Optional: "jobDescriptionId" to auto-match after upload
+ * Matching against a JD runs separately as a background job (POST /api/job-match/[id]/match).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -14,7 +14,6 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { extractTextFromFile } from "@/lib/fileParser";
 import { indexResume } from "@/lib/rag";
-import { matchAllResumes } from "@/lib/resumeMatcher";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import JSZip from "jszip";
 
@@ -59,7 +58,6 @@ export async function POST(req: NextRequest) {
   if (limited) return limited;
 
   const formData = await req.formData();
-  const jobDescriptionId = formData.get("jobDescriptionId") as string | null;
 
   // ── Collect all file entries ─────────────────────────────────
   const entries: FileEntry[] = [];
@@ -127,48 +125,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Auto-match against JD if provided ───────────────────────
-  let matchResults: { resumeId: string; fileName: string; score: number; recommendation: string }[] = [];
-
-  if (jobDescriptionId && created.length > 0) {
-    const jd = await db.jobDescription.findFirst({
-      where: { id: jobDescriptionId, userId: session.user.id },
-      select: { description: true },
-    });
-
-    if (jd) {
-      const ranked = await matchAllResumes(
-        created.map((r) => ({ id: r.id, rawText: r.rawText })),
-        jd.description
-      );
-
-      // Save to DB
-      await Promise.all(
-        ranked.map((r) =>
-          db.resumeMatch.upsert({
-            where: { jobDescriptionId_resumeId: { jobDescriptionId: jobDescriptionId!, resumeId: r.resumeId } },
-            create: { jobDescriptionId: jobDescriptionId!, resumeId: r.resumeId, score: r.score, matchedSkills: r.matchedSkills, missingSkills: r.missingSkills, summary: r.summary, recommendation: r.recommendation },
-            update: { score: r.score, matchedSkills: r.matchedSkills, missingSkills: r.missingSkills, summary: r.summary, recommendation: r.recommendation },
-          })
-        )
-      );
-
-      const fileNameMap = Object.fromEntries(created.map((c) => [c.id, c.fileName]));
-      matchResults = ranked.map((r) => ({
-        resumeId: r.resumeId,
-        fileName: fileNameMap[r.resumeId] ?? r.resumeId,
-        score: r.score,
-        recommendation: r.recommendation,
-      }));
-    }
-  }
-
+  // Matching against a JD is a separate background job (POST /api/job-match/[id]/match),
+  // so this request only uploads and never waits on the AI.
   return NextResponse.json({
     uploaded: created.length,
     failed: errors.length,
     errors,
-    matched: matchResults.length > 0,
-    matchResults,
     resumeIds: created.map((c) => c.id),
   });
 }

@@ -105,6 +105,8 @@ async def fetch_github_data(state: dict) -> dict:
     """Node 2: Fetch public GitHub repos to verify skills — GitHub MCP server, falling back to the REST API."""
     github_username = state.get("extracted_github")
 
+    if state.get("skip_github"):
+        return {"github_repos": [], "github_skill_match": [], "logs": ["⏭️ GitHub check skipped (bulk screening)"]}
     if not github_username:
         return {
             "github_repos": [],

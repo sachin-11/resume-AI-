@@ -23,6 +23,11 @@ function getTransporter() {
   });
 }
 
+// Values below come from resumes and AI output — escape before putting them in HTML.
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+}
+
 // ── Shortlist email to candidate ─────────────────────────────────
 async function sendShortlistEmail({
   to,
@@ -40,6 +45,10 @@ async function sendShortlistEmail({
   companyName: string;
 }) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  candidateName = escapeHtml(candidateName);
+  role = escapeHtml(role);
+  companyName = escapeHtml(companyName);
+  matchedSkills = matchedSkills.map(escapeHtml);
   const skillChips = matchedSkills
     .slice(0, 6)
     .map(
@@ -100,10 +109,41 @@ export interface ShortlistResult {
   campaignInviteCreated: boolean;
 }
 
+export interface ShortlistPreview {
+  eligible: { resumeId: string; fileName: string; score: number; email: string | null }[];
+  needsReview: { resumeId: string; fileName: string; score: number; email: string | null; reviewReasons: string[] }[];
+}
+
+/** Who *would* be shortlisted at this threshold — no emails, invites or webhooks. */
+export async function previewShortlist({ jobDescriptionId, userId, threshold }: {
+  jobDescriptionId: string; userId: string; threshold: number;
+}): Promise<ShortlistPreview> {
+  const jd = await db.jobDescription.findFirst({ where: { id: jobDescriptionId, userId }, select: { id: true } });
+  if (!jd) throw new Error("Job description not found");
+  const matches = await db.resumeMatch.findMany({
+    where: { jobDescriptionId, score: { gte: threshold } },
+    orderBy: { score: "desc" },
+    include: { resume: { select: { fileName: true, rawText: true } } },
+  });
+  const rows = matches.map((m) => ({
+    resumeId: m.resumeId, fileName: m.resume.fileName, score: m.score,
+    email: extractEmailFromText(m.resume.rawText), reviewReasons: m.reviewReasons,
+  }));
+  return {
+    eligible: rows.filter((r) => r.reviewReasons.length === 0)
+      .map((r) => ({ resumeId: r.resumeId, fileName: r.fileName, score: r.score, email: r.email })),
+    needsReview: rows.filter((r) => r.reviewReasons.length > 0),
+  };
+}
+
+/**
+ * Shortlist exactly the candidates the recruiter selected (from the preview):
+ * email, campaign invite, webhook. Nothing reaches a candidate without that selection.
+ */
 export async function runAutoShortlist({
   jobDescriptionId,
   userId,
-  threshold,
+  resumeIds,
   campaignId,
   companyName,
   sendEmails,
@@ -111,7 +151,7 @@ export async function runAutoShortlist({
 }: {
   jobDescriptionId: string;
   userId: string;
-  threshold: number;       // e.g. 65
+  resumeIds: string[];     // the recruiter's confirmed selection
   campaignId?: string;     // optional: add to campaign
   companyName: string;
   sendEmails: boolean;
@@ -123,9 +163,9 @@ export async function runAutoShortlist({
   });
   if (!jd) throw new Error("Job description not found");
 
-  // 2. Fetch matches above threshold
+  // 2. The selected candidates' matches for this JD (any score — the recruiter decided)
   const matches = await db.resumeMatch.findMany({
-    where: { jobDescriptionId, score: { gte: threshold } },
+    where: { jobDescriptionId, resumeId: { in: resumeIds } },
     orderBy: { score: "desc" },
     include: { resume: { select: { fileName: true, rawText: true } } },
   });

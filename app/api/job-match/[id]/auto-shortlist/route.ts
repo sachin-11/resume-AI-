@@ -1,16 +1,14 @@
 /**
  * POST /api/job-match/[id]/auto-shortlist
  *
- * Runs the full auto-shortlist pipeline:
- * - Finds candidates above score threshold
- * - Sends shortlist emails
- * - Adds to campaign (optional)
- * - Fires webhooks
+ * Two steps, so nothing reaches a candidate without the recruiter's say-so:
+ * - { dryRun: true, threshold } → preview: who qualifies (and who needs review); no side effects
+ * - { resumeIds: [...] }        → for exactly those: shortlist email, campaign invite, webhook
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { runAutoShortlist } from "@/lib/autoShortlist";
+import { previewShortlist, runAutoShortlist } from "@/lib/autoShortlist";
 import { z } from "zod";
 
 const schema = z.object({
@@ -19,6 +17,8 @@ const schema = z.object({
   sendEmails:   z.boolean().default(true),
   fireWebhooks: z.boolean().default(true),
   campaignId:   z.string().optional(),
+  dryRun:       z.boolean().default(false),
+  resumeIds:    z.array(z.string().max(64)).max(50).optional(),
 });
 
 export async function POST(
@@ -36,11 +36,19 @@ export async function POST(
     return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
   }
 
+  const { dryRun, resumeIds, threshold, ...actions } = parsed.data;
   try {
+    if (dryRun) {
+      return NextResponse.json(await previewShortlist({ jobDescriptionId, userId: session.user.id, threshold }));
+    }
+    if (!resumeIds?.length) {
+      return NextResponse.json({ error: "Select the candidates to shortlist (run a preview first)." }, { status: 400 });
+    }
     const results = await runAutoShortlist({
       jobDescriptionId,
       userId: session.user.id,
-      ...parsed.data,
+      resumeIds,
+      ...actions,
     });
 
     return NextResponse.json({

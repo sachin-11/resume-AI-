@@ -862,6 +862,41 @@ async def hiring_committee(request: HiringCommitteeRequest, caller: Caller) -> d
 jobs.register("campaign-shortlist", HiringCommitteeRequest, hiring_committee)
 
 
+# ── Bulk resume screening: the screening agent over up to 50 resumes, in parallel ──
+from agents.bulk_screening.graph import bulk_screening_agent  # noqa: E402
+
+
+class BulkResume(BaseModel):
+    id: str = Field(max_length=64)
+    text: str = Field(min_length=30, max_length=20000)
+
+
+class BulkScreeningRequest(BaseModel):
+    job_description: str = Field(min_length=20, max_length=8000)
+    resumes: list[BulkResume] = Field(min_length=1, max_length=50)
+    verify_github: bool = False          # off by default: anonymous GitHub API allows ~60 calls/hour
+    reference_id: str = Field(default="", max_length=64)   # echoed back (e.g. the JD id) so the caller can check it
+
+
+async def bulk_screening(request: BulkScreeningRequest, caller: Caller) -> dict:
+    state = {
+        "job_description": request.job_description,
+        "verify_github": request.verify_github,
+        "reference_id": request.reference_id,
+        "resumes": [r.model_dump() for r in request.resumes],
+        "results": [],
+        "logs": [],
+    }
+    final_state, usage = await run_agent(
+        "bulk-screening", bulk_screening_agent, state,
+        max_concurrency=int(os.getenv("COMMITTEE_MAX_CONCURRENCY", "8")),
+    )
+    return {"success": True, "usage": usage, "report": final_state["report"]}
+
+
+jobs.register("bulk-screening", BulkScreeningRequest, bulk_screening)
+
+
 class JobSubmitRequest(BaseModel):
     agent: str
     input: dict

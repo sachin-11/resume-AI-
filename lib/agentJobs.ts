@@ -8,7 +8,7 @@ import { agentHeaders, type AgentCaller } from "@/lib/agentAuth";
 
 const AGENT_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:8000";
 
-export type AgentJobName = "screen-candidate" | "panel-interview" | "orchestrate" | "campaign-shortlist";
+export type AgentJobName = "screen-candidate" | "panel-interview" | "orchestrate" | "campaign-shortlist" | "bulk-screening";
 
 export async function submitAgentJob(
   caller: AgentCaller,

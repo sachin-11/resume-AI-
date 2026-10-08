@@ -1,14 +1,17 @@
 /**
  * POST /api/job-match/[id]/match
  *
- * Runs AI matching for all user resumes against the given JD.
- * Saves results to DB and returns ranked candidates.
+ * Queues AI screening of the recruiter's resumes (most recent ≤ 50) against this
+ * JD on agent-service and returns { jobId }. The browser polls
+ * /api/agent-jobs/[jobId], then calls /api/job-match/[id]/match/save to store
+ * the ranked results.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { matchAllResumes } from "@/lib/resumeMatcher";
+import { submitAgentJob } from "@/lib/agentJobs";
+import { BULK_SCREENING_MAX } from "@/lib/bulkScreening";
 
 export async function POST(
   _req: NextRequest,
@@ -22,62 +25,24 @@ export async function POST(
   // Verify JD belongs to user
   const jd = await db.jobDescription.findFirst({
     where: { id: jdId, userId: session.user.id },
+    select: { description: true },
   });
   if (!jd) return NextResponse.json({ error: "Job description not found" }, { status: 404 });
 
-  // Fetch all user resumes
   const resumes = await db.resume.findMany({
     where: { userId: session.user.id },
-    select: { id: true, rawText: true, fileName: true },
+    orderBy: { createdAt: "desc" },
+    take: BULK_SCREENING_MAX,
+    select: { id: true, rawText: true },
   });
-
-  if (resumes.length === 0) {
+  const usable = resumes.filter((r) => (r.rawText ?? "").trim().length >= 30);
+  if (usable.length === 0) {
     return NextResponse.json({ error: "No resumes found. Upload resumes first." }, { status: 400 });
   }
 
-  // Run AI matching
-  const results = await matchAllResumes(
-    resumes.map((r) => ({ id: r.id, rawText: r.rawText })),
-    jd.description
-  );
-
-  // Upsert results into DB
-  await Promise.all(
-    results.map((r) =>
-      db.resumeMatch.upsert({
-        where: { jobDescriptionId_resumeId: { jobDescriptionId: jdId, resumeId: r.resumeId } },
-        create: {
-          jobDescriptionId: jdId,
-          resumeId: r.resumeId,
-          score: r.score,
-          matchedSkills: r.matchedSkills,
-          missingSkills: r.missingSkills,
-          summary: r.summary,
-          recommendation: r.recommendation,
-        },
-        update: {
-          score: r.score,
-          matchedSkills: r.matchedSkills,
-          missingSkills: r.missingSkills,
-          summary: r.summary,
-          recommendation: r.recommendation,
-        },
-      })
-    )
-  );
-
-  // Return ranked results with resume file names
-  const resumeMap = Object.fromEntries(resumes.map((r) => [r.id, r.fileName]));
-  const ranked = results.map((r, idx) => ({
-    rank: idx + 1,
-    resumeId: r.resumeId,
-    fileName: resumeMap[r.resumeId] ?? "Unknown",
-    score: r.score,
-    matchedSkills: r.matchedSkills,
-    missingSkills: r.missingSkills,
-    summary: r.summary,
-    recommendation: r.recommendation,
-  }));
-
-  return NextResponse.json({ ranked, total: ranked.length });
+  return submitAgentJob(session.user, "bulk-screening", {
+    job_description: jd.description.slice(0, 8000),
+    reference_id: jdId,
+    resumes: usable.map((r) => ({ id: r.id, text: r.rawText.slice(0, 20000) })),
+  });
 }
