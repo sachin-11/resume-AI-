@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Plus, Users, Link2, Mail, CheckCircle, Clock, Loader2, ChevronRight, Copy, Check, Trash2, AlertCircle, Calendar, X, Download, FileText, GitCompare, Upload, StickyNote, RefreshCw } from "lucide-react";
+import { Plus, Users, Link2, Mail, CheckCircle, Clock, Loader2, ChevronRight, Copy, Check, Trash2, AlertCircle, Calendar, X, Download, FileText, GitCompare, Upload, StickyNote, RefreshCw, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatDate, getDifficultyColor, getRoundTypeLabel, getScoreColor } from "@/lib/utils";
 import { generateCandidatePDF } from "@/lib/pdf-export";
+import { AiShortlistPanel } from "./ai-shortlist-panel";
 
 interface Campaign {
   id: string; title: string; role: string; difficulty: string;
@@ -25,6 +26,8 @@ interface Invite {
   cameraEverEnabled?: boolean;
   faceDetectionActive?: boolean;
   isFallbackScore?: boolean;
+  shortlisted?: boolean;
+  shortlistNote?: string | null;
   proctoring?: {
     multipleFaces: number; noFace: number; lookingAway: number;
     noise: number; copyPaste: number;
@@ -94,6 +97,7 @@ export default function CampaignsPage() {
   const [transcripts, setTranscripts] = useState<Record<string, string>>({});
   const [transcriptLoading, setTranscriptLoading] = useState<Record<string, boolean>>({});
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+  const [showShortlist, setShowShortlist] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
@@ -127,6 +131,12 @@ export default function CampaignsPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Reload the list in place (keeps panels open), e.g. after the shortlist is confirmed.
+  async function refreshInvites(campaignId: string) {
+    const res = await fetch(`/api/campaigns/${campaignId}/invites`);
+    if (res.ok) setInvites((await res.json()).invites ?? []);
+  }
+
   async function loadInvites(campaign: Campaign) {
     setSelected(campaign);
     setInvitesLoading(true);
@@ -134,6 +144,7 @@ export default function CampaignsPage() {
     setShowSlots(false);
     setSlots([]);
     setSelectedForCompare([]); // reset compare selection
+    setShowShortlist(false);
     try {
       const res = await fetch(`/api/campaigns/${campaign.id}/invites`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -708,6 +719,12 @@ export default function CampaignsPage() {
                           <GitCompare className="h-3.5 w-3.5" /> Compare ({selectedForCompare.length})
                         </a>
                       )}
+                      {selected && invites.filter((i) => i.status === "completed").length >= 2 && (
+                        <button onClick={() => setShowShortlist((v) => !v)}
+                          className="flex items-center gap-1.5 rounded-lg border border-violet-500/40 px-2.5 py-1.5 text-xs font-medium text-violet-400 hover:bg-violet-500/10 transition-colors">
+                          <Sparkles className="h-3.5 w-3.5" /> AI Shortlist
+                        </button>
+                      )}
                       {invites.length > 0 && selected && (
                         <a href={`/api/campaigns/${selected.id}/export`} download
                           className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors">
@@ -723,6 +740,11 @@ export default function CampaignsPage() {
                   )}
                 </CardHeader>
                 <CardContent>
+                  {showShortlist && selected && (
+                    <div className="mb-3">
+                      <AiShortlistPanel campaignId={selected.id} onConfirmed={() => refreshInvites(selected.id)} />
+                    </div>
+                  )}
                   {invitesLoading ? (
                     <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
                   ) : invites.length === 0 ? (
@@ -792,6 +814,12 @@ export default function CampaignsPage() {
                                     className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border bg-slate-500/15 border-slate-500/40 text-slate-400"
                                   >
                                     {!inv.cameraEverEnabled ? "📷 No camera" : "👁️ No face check"}
+                                  </span>
+                                )}
+                                {inv.shortlisted && (
+                                  <span title={inv.shortlistNote ?? "Shortlisted"}
+                                    className="rounded-full px-2 py-0.5 text-xs font-semibold border bg-violet-500/15 border-violet-500/40 text-violet-400">
+                                    ⭐ Shortlisted
                                   </span>
                                 )}
                                 <Badge variant={inv.status === "completed" ? "success" : inv.status === "started" ? "warning" : inv.status === "abandoned" ? "destructive" : "secondary"}>

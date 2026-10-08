@@ -810,6 +810,58 @@ jobs.register("panel-interview", InterviewPanelRequest, panel_interview)
 jobs.register("orchestrate", OrchestrateRequest, orchestrate)
 
 
+# ── Hiring committee: rank a campaign's candidates (job only — it can take minutes) ──
+from agents.hiring_committee.graph import hiring_committee_agent  # noqa: E402
+
+
+class CommitteeAnswer(BaseModel):
+    question: str = Field(default="", max_length=2000)
+    answer: str = Field(default="", max_length=4000)
+
+
+class CommitteeCandidate(BaseModel):
+    id: str = Field(max_length=64)
+    name: str = Field(default="", max_length=200)          # for the report only — never sent to the LLM
+    overall_score: int = Field(ge=0, le=100)
+    technical_score: int = Field(default=0, ge=0, le=100)
+    communication_score: int = Field(default=0, ge=0, le=100)
+    confidence_score: int = Field(default=0, ge=0, le=100)
+    strengths: list[str] = Field(default=[], max_length=20)
+    weak_areas: list[str] = Field(default=[], max_length=20)
+    summary: str = Field(default="", max_length=2000)
+    integrity_flag: Literal["clean", "warning", "suspicious"] = "clean"
+    tab_switch_count: int = Field(default=0, ge=0)
+    feedback_is_fallback: bool = False
+    answers: list[CommitteeAnswer] = Field(default=[], max_length=20)
+
+
+class HiringCommitteeRequest(BaseModel):
+    role: str = Field(max_length=200)
+    job_description: str = Field(default="", max_length=8000)
+    shortlist_size: int = Field(default=5, ge=1, le=25)
+    candidates: list[CommitteeCandidate] = Field(min_length=1, max_length=100)
+
+
+async def hiring_committee(request: HiringCommitteeRequest, caller: Caller) -> dict:
+    """Map-reduce: assess every candidate in parallel, then rank by explicit rules."""
+    state = {
+        "role": request.role,
+        "job_description": request.job_description,
+        "shortlist_size": request.shortlist_size,
+        "candidates": [c.model_dump() for c in request.candidates],
+        "assessments": [],
+        "logs": [],
+    }
+    final_state, usage = await run_agent(
+        "hiring-committee", hiring_committee_agent, state,
+        max_concurrency=int(os.getenv("COMMITTEE_MAX_CONCURRENCY", "8")),
+    )
+    return {"success": True, "usage": usage, "report": final_state["report"], "logs": final_state["logs"][-30:]}
+
+
+jobs.register("campaign-shortlist", HiringCommitteeRequest, hiring_committee)
+
+
 class JobSubmitRequest(BaseModel):
     agent: str
     input: dict

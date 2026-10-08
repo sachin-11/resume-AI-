@@ -281,6 +281,10 @@ model CandidateInvite {
   scheduledAt    DateTime?
   slotId         String?
   portalPassword String?
+  // Recruiter-confirmed shortlist (e.g. from the AI hiring committee)
+  shortlisted    Boolean            @default(false)
+  shortlistedAt  DateTime?
+  shortlistNote  String?
   createdAt      DateTime           @default(now())
   campaign       InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   slot           InterviewSlot?     @relation(fields: [slotId], references: [id])

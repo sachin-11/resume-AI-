@@ -75,7 +75,9 @@ def validate_input(agent: str, payload: dict) -> BaseModel:
 # ── Progress (node-by-node) ──────────────────────────────────────
 
 class ProgressCollector(BaseCallbackHandler):
-    """Records each LangGraph node as it starts (sub-agent nodes included)."""
+    """Records each LangGraph node as it starts (sub-agent nodes included).
+    Repeated runs of the same node (fan-out branches) bump a `count` instead of
+    adding events, so the UI can show "Assessing candidates (37)"."""
 
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -84,7 +86,9 @@ class ProgressCollector(BaseCallbackHandler):
         node = (metadata or {}).get("langgraph_node")
         # A node's own run has name == node; edges/routers inside it have other names.
         if node and kwargs.get("name") == node and not node.startswith("__"):
-            if not self.events or self.events[-1]["node"] != node:
+            if self.events and self.events[-1]["node"] == node:
+                self.events[-1]["count"] = self.events[-1].get("count", 1) + 1
+            else:
                 self.events.append({"node": node, "at": _now().isoformat()})
 
 
@@ -320,11 +324,13 @@ class JobRunner:
 
     async def _heartbeat(self, job_id: str, collector: ProgressCollector) -> None:
         """Publish progress and keep the lease alive while the job runs."""
-        sent = -1
+        sent = None
         while True:
             await asyncio.sleep(0.5)
-            if len(collector.events) != sent or int(time.time()) % 15 == 0:
-                sent = len(collector.events)
+            events = collector.events
+            snapshot = (len(events), events[-1].get("count", 1) if events else 0)
+            if snapshot != sent or int(time.time()) % 15 == 0:
+                sent = snapshot
                 try:
                     await self.store.heartbeat(job_id, collector.events)
                 except Exception as e:

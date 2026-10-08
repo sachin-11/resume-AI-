@@ -174,10 +174,18 @@ def run_config(
 
 async def run_agent(
     agent: str, graph, state: dict, user_id: Optional[str] = None, thread: Optional[str] = None,
+    max_concurrency: Optional[int] = None,
 ) -> tuple[dict, dict]:
-    """Invoke a compiled graph with tracing; returns (final_state, usage_summary)."""
+    """Invoke a compiled graph with tracing; returns (final_state, usage_summary).
+
+    `max_concurrency` caps how many nodes run at once — for fan-out graphs, so 100
+    parallel branches don't fire 100 simultaneous LLM calls.
+    """
     usage = UsageCollector()
-    final_state = await graph.ainvoke(state, config=run_config(agent, usage, user_id, thread))
+    config = run_config(agent, usage, user_id, thread)
+    if max_concurrency:
+        config["max_concurrency"] = max_concurrency
+    final_state = await graph.ainvoke(state, config=config)
     summary = usage.summary()
     logger.info(
         "agent_run agent=%s calls=%s input_tokens=%s output_tokens=%s",

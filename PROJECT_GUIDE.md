@@ -79,6 +79,7 @@ Next.js chhote, tez request-response ke liye best hai. AI agents ko lamba chalna
 4. **AI Screening** → resume vs JD + candidate ka GitHub check
 5. **AI Panel** → 3 AI interviewers (Technical, HR, Domain) ek saath judge karte hain
 6. **Recruitment Copilot** → chat assistant jo kai kaam ek message mein karta hai, approval lekar
+7. **AI Hiring Committee** → campaign ke saare candidates (100 tak) ko AI parallel mein assess karta hai, ranked shortlist suggest karta hai; recruiter confirm karta hai
 
 **Platform**: Login (email, Google, phone OTP), teams, Stripe billing (Free/Pro/Enterprise), admin dashboard, AI cost tracking.
 
@@ -121,6 +122,7 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 | **ReAct** | AI khud socho → tool chalao → result dekho → phir socho. Agla step pehle se fix nahi | **FAQ agent**: policy search karta hai, result kaam ka na ho to doosre shabdon se dobara search (max 3). Hiring decisions mein ReAct **nahi** — wahan fixed flow |
 | **Supervisor pattern** | **Manager + team.** Manager kaam baant-ta hai, team karti hai | Planner + supervisor = manager; screening, scheduling, FAQ = team |
 | **Parallel agents** | Teen judges ek saath number dete hain, ek ke baad ek nahi | 3 AI interviewers parallel → ~3x tez |
+| **Map-reduce (fan-out)** | 100 copies check karni hain → 100 teachers ek-ek copy, phir ek head merit list banaye | **Hiring Committee**: har candidate ke liye ek agent (LangGraph `Send`), max 8 ek saath; phir ranking **code** karta hai |
 | **Conflict resolution** | Judges alag bolein to kya? | Weighted score (Technical 50%, HR 25%, Domain 25%) + majority vote; barabar ho to "hold" → insaan decide kare |
 | **Memory** | Agent ko pichli baat yaad rahe | Copilot conversation database mein save; "usko schedule karo" bolo to samajh jaata hai "usko" = Asha |
 | **Human-in-the-loop** | Bade faisle se pehle **boss ka signature** | Reject aur email bhejne se pehle system rukta hai; server restart ho jaaye tab bhi approval wahin se continue |
@@ -164,7 +166,7 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 
 ## 9. Quality kaise ensure ki (testing)
 
-1. **105 automatic tests** — fake AI ke saath, har PR par chalte hain (GitHub Actions). Free, fast.
+1. **112 automatic tests** — fake AI ke saath, har PR par chalte hain (GitHub Actions). Free, fast.
 2. **Evals (asli AI ke saath test):** 4 cheezein check hoti hain:
    - Planner sahi steps banata hai? (16 examples)
    - Screening sahi decision deta hai? (5 clear cases)
@@ -211,6 +213,12 @@ Recruitment Copilot — multi-step plan, memory, beech mein ruk ke approval lena
 **Q: LangGraph kyun?**
 Isme flowchart jaisa control milta hai — steps, loops, beech mein rukna (approval), aur state save karna. Hiring jaise sensitive kaam mein predictable flow chahiye tha.
 
+**Q: Multi-agent kahan use kiya?**
+Teen jagah, teen patterns: (1) **Copilot** — supervisor pattern (manager + team), (2) **Interview Panel** — 3 judges parallel + vote, (3) **Hiring Committee** — map-reduce: har candidate ke liye ek agent parallel (`Send` API), phir code ranking. Live test: 8 candidates 5.4s mein (sequential ~20s). Suspicious integrity ya injection wale candidate kabhi auto-shortlist nahi hote, chahe score sabse zyada ho.
+
+**Q: Multi-agent kahan NAHI use karte?**
+Live interview (latency), simple kaam (ek call kaafi), aur final hiring decision (code ki policy + insaan).
+
 **Q: ReAct pattern use kiya?**
 Haan, FAQ agent mein — wahan agla step data dekh ke pata chalta hai (search ka result achha nahi to dobara search). Hiring decisions (screening, reject, booking) mein jaan-boojh ke nahi, kyunki wahan predictable aur auditable flow chahiye. ReAct ko sirf allowlisted, read-only tool milta hai, max 3 searches, aur bina document ke answer allowed nahi. Eval: ReAct 100% vs single-search 40%.
 
@@ -241,8 +249,8 @@ Purana data auto-delete (privacy), baaki lambe features ko bhi job queue par lan
 
 1. **30-second pitch** (section 1)
 2. **Diagram draw karo** (section 3) — 2 box + database + AI
-3. **Ek kahani sunao** — Copilot wali (section 5, kahani 2)
+3. **Ek kahani sunao** — Copilot wali (section 5, kahani 2), ya Hiring Committee (100 candidates parallel)
 4. **Ek-do problem + solution** (section 7) — bias wala aur double-booking wala sabse strong hain
 5. Sawaal aaye to **section 6 aur 11**
 
-**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 10 AI agents · 105 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1
+**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 11 AI agents · 112 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1

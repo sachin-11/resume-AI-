@@ -7,7 +7,8 @@ export interface AgentJob<T = unknown> {
   id: string;
   agent: string;
   status: "queued" | "running" | "succeeded" | "failed";
-  progress: { node: string; at: string }[];
+  // `count` > 1 when the same node ran repeatedly (parallel fan-out branches)
+  progress: { node: string; at: string; count?: number }[];
   result: T | null;
   error: string | null;
   error_code: number | null;
@@ -36,13 +37,18 @@ const NODE_LABELS: Record<string, string> = {
   hr_eval: "HR interviewer reviewing",
   domain_eval: "Domain expert reviewing",
   consensus: "Panel reaching consensus",
+  assess_candidate: "Assessing candidates",
+  rank_candidates: "Ranking the shortlist",
 };
 
-/** The latest step worth showing, e.g. "Checking GitHub". */
+/** The latest step worth showing, e.g. "Checking GitHub" or "Assessing candidates (37)". */
 export function progressLabel(progress: AgentJob["progress"]): string | null {
   for (let i = progress.length - 1; i >= 0; i--) {
     const label = NODE_LABELS[progress[i].node];
-    if (label) return label;
+    if (label) {
+      const count = progress[i].count ?? 1;
+      return count > 1 ? `${label} (${count})` : label;
+    }
   }
   return null;
 }
