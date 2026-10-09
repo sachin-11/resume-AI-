@@ -81,7 +81,7 @@ def get_langfuse():
                 secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
                 host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
                 environment=os.getenv("APP_ENV", "development"),
-                release=os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("RELEASE"),
+                release=os.getenv("RENDER_GIT_COMMIT") or os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("RELEASE"),
                 sample_rate=float(os.getenv("LANGFUSE_SAMPLE_RATE", "1.0")),
                 mask=None if capture_content else _mask,
             )

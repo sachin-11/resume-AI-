@@ -4,7 +4,7 @@
 |---|---|
 | **Owner** | Sachin |
 | **On-call** | Sachin (primary). Add a secondary here before real customers rely on this. |
-| **Runs on** | Railway (`agent-service/`, auto-deploys `master`). The Next.js app (Amplify) calls it. |
+| **Runs on** | Render — `https://resume-ai-wx2p.onrender.com` (root dir `agent-service/`). The Next.js app (Amplify, `AGENT_SERVICE_URL`) calls it. Free tier: sleeps when idle, first request ~45s. |
 | **Alerts go to** | `ALERT_WEBHOOK_URL` (Slack/Discord incoming webhook) + `ERROR ALERT …` log lines |
 | **Traces** | Langfuse — filter by tag `agent:<name>`, `request:<id>`, `version:<fingerprint>` |
 
@@ -31,7 +31,8 @@ curl -H "Authorization: Bearer $TOKEN" $AGENT_URL/admin/metrics
 1. Open a PR. CI runs the unit tests (fake LLM) and, **if the PR touches prompts, models,
    guardrails, tools, `releases.json` or eval cases, the real-LLM eval gate** against the prod alias.
    A metric below its threshold fails the PR (`evals/report.md` is attached as an artifact).
-2. Merge → Railway deploys `master`.
+2. Merge → Render deploys `master` (check Render → Settings: branch `master`, Auto-Deploy on). Confirm with
+   `GET /health` → `release` shows the expected alias and release.
 3. Watch `/admin/metrics` and the Langfuse `version:<new fingerprint>` traces for 15 minutes.
 
 ### Changing a model (or any release setting)
@@ -54,9 +55,9 @@ re-ingested (`POST /faq/ingest`) — old vectors were built with the old setting
 
 | What went wrong | Do this |
 |---|---|
-| Bad code / prompt change | Railway → Deployments → previous deployment → **Redeploy** (seconds). Then `git revert` the PR. |
+| Bad code / prompt change | Render → Events → previous successful deploy → **Rollback**. Then `git revert` the PR. |
 | Bad model / KB release | `python -m core.release rollback prod`, commit, push. |
-| Need it fixed *now*, no deploy | Set `OPENAI_REASONING_MODEL` / `OPENAI_FAST_MODEL` / `GROQ_*_MODEL` on Railway (overrides the pin; restart). |
+| Need it fixed *now*, no deploy | Set `OPENAI_REASONING_MODEL` / `OPENAI_FAST_MODEL` / `GROQ_*_MODEL` on Render (overrides the pin; restart). |
 | Agent is doing damage | Kill switch (below) first, then roll back. |
 
 ## 4. Kill switch
@@ -70,7 +71,7 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json
 
 Takes effect on every replica within 5 seconds, stored in Postgres (`agent_memory.agent_flags`),
 recorded in the audit log. If Postgres itself is down: set `AGENT_KILL_SWITCH=bulk-screening`
-(or `*`) on Railway — env always wins. `AGENT_READ_ONLY=…` does the same for read-only.
+(or `*`) on Render — env always wins. `AGENT_READ_ONLY=…` does the same for read-only.
 
 Agent names: `improve-resume, screen-candidate, learning-path, panel-interview, market-intelligence,
 daily-ops, job-match, auto-apply, orchestrate, hiring-committee, bulk-screening`, plus `faq` (indexing).
@@ -84,7 +85,7 @@ daily-ops, job-match, auto-apply, orchestrate, hiring-committee, bulk-screening`
 | 🟠 `latency:<agent>` | Provider slow, Groq rate limiting (`GROQ_MAX_RPS`), big fan-out | Langfuse → slowest spans. Lower `COMMITTEE_MAX_CONCURRENCY`, or move load to OpenAI. |
 | 💸 `daily_cost` | Abuse, a loop, a pricier model | `/admin/metrics` → `cost_usd` per agent → throttle or switch off the top spender; check `budget_exceeded` counts and Langfuse for repeated calls. |
 
-## 6. Limits and throttling (Railway env vars)
+## 6. Limits and throttling (Render env vars)
 
 | Variable | Default | Effect |
 |---|---|---|
