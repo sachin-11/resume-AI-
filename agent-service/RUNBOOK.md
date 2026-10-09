@@ -14,7 +14,8 @@
 |---|---|
 | Is it up? Which release? | `GET /health` |
 | What exactly is each agent running? | `GET /version` — models, prompt-code hash, tools, KB config, fingerprint per agent |
-| Error rate, p95 latency, cost, canary vs stable | `GET /admin/metrics` (this replica) · Langfuse (all replicas) |
+| How has it been doing (days/weeks)? | **Admin → Agent health** (`/admin/agents`): runs vs failures per day, cost, p95, per-agent table, recent failures with request ids. Data: `agent_memory.agent_runs` (kept `RUN_HISTORY_DAYS`, default 90) via `GET /admin/runs?days=` |
+| Error rate, p95 latency, cost right now, canary vs stable | `GET /admin/metrics` (this process; resets on restart/sleep) · Langfuse |
 | Which agents are switched off / circuit open? | `GET /admin/flags`, `circuits` in `/admin/metrics` |
 | Who did what (tool calls, approvals, flag changes)? | `GET /admin/audit?event=tool_call` · `agent.audit` log lines |
 | Why did one request fail? | `x-request-id` response header → Langfuse tag `request:<id>` / log lines `[req=<id>]` |

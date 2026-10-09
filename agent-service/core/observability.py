@@ -3,7 +3,7 @@ Observability — Langfuse tracing, per-run token usage + cost, request IDs, and
 `run_agent`, the one entry point every agent run goes through. It applies the
 run guards (core/guards.py: timeout, loop limit, token/$ budget, circuit
 breaker), the kill switch (core/flags.py), picks the release variant
-(core/release.py) and records metrics (core/metrics.py).
+(core/release.py) and records metrics (core/metrics.py) and run history (core/runlog.py).
 
 Langfuse is opt-in (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY). Without it, runs
 still get usage totals and request-id-tagged logs; nothing here ever raises into
@@ -28,7 +28,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from langgraph.errors import GraphRecursionError
 
-from core import flags, guards, metrics, release
+from core import flags, guards, metrics, release, runlog
 from core.auth import caller_var
 from core.pricing import cost_usd
 
@@ -244,6 +244,7 @@ async def run_agent(
                           f"⛔ {agent}: circuit opened after {breaker.failures} failed runs in a row (last: {status}).")
         metrics.record_run(agent, status=status, ms=ms, tokens=summary["input_tokens"] + summary["output_tokens"],
                            cost=summary["cost_usd"], variant=variant, version=version["fingerprint"])
+        runlog.record(agent=agent, status=status, ms=ms, usage=summary, version=version["fingerprint"], variant=variant)
         log = logger.info if status == "ok" else logger.warning
         log(
             "agent_run agent=%s status=%s ms=%d calls=%s input_tokens=%s output_tokens=%s cost_usd=%.5f version=%s variant=%s",

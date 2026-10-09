@@ -4,8 +4,9 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import {
   Users, Search, Loader2, Crown, Zap, Building2,
-  CheckCircle, Shield, ChevronLeft, ChevronRight, DollarSign,
+  CheckCircle, Shield, ChevronLeft, ChevronRight, DollarSign, Activity,
 } from "lucide-react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -129,6 +130,9 @@ export default function AdminPage() {
           <Shield className="h-6 w-6 text-violet-400" /> Admin Dashboard
         </h1>
         <p className="text-muted-foreground mt-1">Manage users and platform overview</p>
+        <Link href="/admin/agents" className="mt-2 inline-flex items-center gap-1.5 text-sm text-violet-400 hover:underline">
+          <Activity className="h-4 w-4" /> Agent health — runs, failures, latency, cost
+        </Link>
       </div>
 
       {/* Stats */}

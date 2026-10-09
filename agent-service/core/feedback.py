@@ -10,6 +10,7 @@ The stored input/output are what the user saw; contact details are masked before
 storage (same rule as for prompts), and both are size-capped. Postgres when the
 pool exists, in-memory otherwise.
 """
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ logger = logging.getLogger("agent.feedback")
 Rating = Literal["up", "down"]
 _memory: list[dict] = []
 _table_ready = False
+# Concurrent first writes would race on CREATE TABLE (Postgres rejects the loser).
+_table_lock = asyncio.Lock()
 
 
 def _pool():
@@ -33,25 +36,28 @@ async def _ensure_table(pool) -> None:
     global _table_ready
     if _table_ready:
         return
-    async with pool.connection() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS agent_feedback (
-                id          TEXT PRIMARY KEY,
-                agent       TEXT NOT NULL,
-                rating      TEXT NOT NULL,
-                comment     TEXT NOT NULL DEFAULT '',
-                input       TEXT NOT NULL DEFAULT '',
-                output      TEXT NOT NULL DEFAULT '',
-                version     TEXT,
-                request_id  TEXT,
-                thread_id   TEXT,
-                user_id     TEXT,
-                org_id      TEXT,
-                exported    BOOLEAN NOT NULL DEFAULT false,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-            )""")
-        await conn.execute("CREATE INDEX IF NOT EXISTS agent_feedback_queue ON agent_feedback (rating, exported)")
-    _table_ready = True
+    async with _table_lock:
+        if _table_ready:
+            return
+        async with pool.connection() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_feedback (
+                    id          TEXT PRIMARY KEY,
+                    agent       TEXT NOT NULL,
+                    rating      TEXT NOT NULL,
+                    comment     TEXT NOT NULL DEFAULT '',
+                    input       TEXT NOT NULL DEFAULT '',
+                    output      TEXT NOT NULL DEFAULT '',
+                    version     TEXT,
+                    request_id  TEXT,
+                    thread_id   TEXT,
+                    user_id     TEXT,
+                    org_id      TEXT,
+                    exported    BOOLEAN NOT NULL DEFAULT false,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                )""")
+            await conn.execute("CREATE INDEX IF NOT EXISTS agent_feedback_queue ON agent_feedback (rating, exported)")
+        _table_ready = True
 
 
 async def save(*, agent: str, rating: Rating, comment: str, input: str, output: str, version: Optional[str],

@@ -22,6 +22,10 @@ html.dark {
   --border: 240 3.7% 15.9%;
   --input: 240 3.7% 15.9%;
   --ring: 262 83% 58%;
+  /* Chart roles (validated for colour-blind separation on the card surface) */
+  --viz-series: #3987e5;
+  --viz-ok: #3987e5;
+  --viz-fail: #d03b3b;
 }
 
 /* ── Light mode — applied via html.light ────────────────────── */
@@ -45,6 +49,9 @@ html.light {
   --border: 240 5.9% 90%;
   --input: 240 5.9% 90%;
   --ring: 262 83% 58%;
+  --viz-series: #2a78d6;
+  --viz-ok: #2a78d6;
+  --viz-fail: #d03b3b;
 }
 
 @layer base {
