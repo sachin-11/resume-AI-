@@ -105,7 +105,7 @@ def _check_alerts(agent: str, s: AgentStats) -> None:
     spend = _daily_cost[date.today()]
     budget = _f("ALERT_DAILY_COST_USD", "5")
     if budget > 0 and spend >= budget:
-        alert("daily_cost", f"💸 LLM spend today is ${spend:.2f} (alarm at ${budget:.2f}). "
+        alert("daily_cost", f"💸 LLM spend today is ${spend:.4f} (alarm at ${budget:.4f}). "
                             "Throttle or switch off the top spender — see RUNBOOK.md.")
 
 

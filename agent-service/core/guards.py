@@ -115,8 +115,8 @@ class BudgetGuard(BaseCallbackHandler):
         if self.tokens > self.limits.max_tokens or self.cost_usd > self.limits.max_cost_usd:
             self.tripped = True
             raise BudgetExceeded(
-                f"Run budget exceeded: {self.tokens} tokens / ${self.cost_usd:.3f} "
-                f"(limits {self.limits.max_tokens} tokens / ${self.limits.max_cost_usd:.2f})"
+                f"Run budget exceeded: {self.tokens} tokens / ${self.cost_usd:.4f} "
+                f"(limits {self.limits.max_tokens} tokens / ${self.limits.max_cost_usd:.4f})"
             )
 
     def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:

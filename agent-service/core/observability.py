@@ -219,7 +219,7 @@ async def run_agent(
     try:
         final_state = await asyncio.wait_for(graph.ainvoke(state, config=config), timeout=limits.timeout_s)
         if budget.tripped:   # a node caught BudgetExceeded and carried on with a fallback
-            raise guards.BudgetExceeded(f"Run budget exceeded ({budget.tokens} tokens / ${budget.cost_usd:.3f})")
+            raise guards.BudgetExceeded(f"Run budget exceeded ({budget.tokens} tokens / ${budget.cost_usd:.4f})")
     except guards.AgentRunError as e:
         status = e.code
         raise
