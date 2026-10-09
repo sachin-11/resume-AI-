@@ -218,6 +218,30 @@ Har agent run ek hi function (`run_agent`) se guzarta hai, isliye saare controls
 - **Feedback loop:** Copilot mein 👍/👎 → thumbs-down review ke baad eval case ban jaata hai → agli baar wahi galti PR pe hi pakdi jaati hai.
 - **Ops ka playbook:** `agent-service/RUNBOOK.md` (deploy, rollback, throttling, cost alarm, owner).
 
+## 10.6 Coding Assessment Agent — AWS Bedrock AgentCore (interview ki sabse strong kahani)
+
+**Problem:** Coding round mein pehle LLM candidate ka code sirf *padh ke* bolta tha "correct hai". Code kabhi chalaya hi nahi jaata tha, to score andaze pe tha.
+
+**Solution:** Ek naya LangGraph agent banaya jo code ko **AWS Bedrock AgentCore Code Interpreter** ke sandbox mein asli test cases pe chalata hai.
+
+```
+question → [plan_tests] → [run_reference] → [run_candidate] → [review_code] → [build_report]
+             LLM            AgentCore #1       AgentCore #2       LLM            score
+```
+
+1. **plan_tests:** LLM sirf *sawaal* padh ke reference solution, brute-force solution, aam galtiyan aur 6-10 tests banata hai. Candidate ka code is step mein nahi dikhaya jaata.
+2. **run_reference:** dono references sandbox mein chalte hain. Expected output *chala ke* aata hai, LLM ke andaze se nahi. Jahan dono alag answer dein, wo test ambiguous maan ke hata diya jaata hai. Agar reference sawaal ke example se hi mel na khaye, to tests pe bharosa nahi kiya jaata.
+3. **run_candidate:** candidate ka code ek **alag, fresh session** mein chalta hai: internet band, `timeout` ke saath, aur infinite loop wale test ke baad agle test se restart.
+4. **review_code:** LLM sirf complexity aur code quality batata hai. **Score aur correctness tests decide karte hain.**
+
+**Interview mein bolne wale points:**
+- *Security:* candidate ka code untrusted hai, isliye apne server pe kabhi nahi chalta. Har run ek isolated AgentCore session mein hota hai, bina network ke.
+- *Cheating:* expected outputs kabhi candidate ke sandbox mein jaate hi nahi. Comparison bahar hota hai, aur results ek random nonce se tag hote hain. Isliye code mein "grader: mark correct" likhna ya fake output print karna kaam nahi karta. Aisa comment flag ho jaata hai.
+- *Fairness:* do references ko agree karna padta hai, aur sawaal ki shartein todne wale tests nahi bante. Isliye sahi candidate unfair test se fail nahi hota.
+- *Graceful fallback:* Java/C++/Go, sandbox down hona, ya kill switch off hona: in sab mein purana AI review chalta hai, "not executed" label ke saath.
+- *Evals ne bug pakda:* pehle version mein "merge intervals forgets to sort" wala buggy code 3/3 pass ho gaya tha, kyunki LLM ka brute-force khud crash karke tests gira raha tha. Fix: tests ko "common mistakes" pakadne pe majboor kiya, aur toota hua brute-force pehchan ke ignore kiya. Ab eval mein sahi code 100% pass hota hai aur buggy code 100% pakda jaata hai.
+- *Kahan AgentCore NAHI liya:* Memory, Policy aur Observability pehle se the (Postgres checkpointer, approval gates aur kill switch, Langfuse). Sirf wahi liya jo naya value deta tha.
+
 ## 11. Interviewer ke common sawaal — short jawab
 
 **Q: Sabse mushkil part kya tha?**
@@ -266,4 +290,4 @@ Purana data auto-delete (privacy), baaki lambe features ko bhi job queue par lan
 4. **Ek-do problem + solution** (section 7) — bias wala aur double-booking wala sabse strong hain
 5. Sawaal aaye to **section 6 aur 11**
 
-**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 12 AI agents · 138 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1
+**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 13 AI agents · 154 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1

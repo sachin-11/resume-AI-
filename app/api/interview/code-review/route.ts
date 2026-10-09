@@ -1,7 +1,15 @@
 /**
  * POST /api/interview/code-review
  *
- * AI reviews candidate's code submission:
+ * Full review: queued as a "code-assessment" job on agent-service, which RUNS the
+ * code on generated tests in AWS Bedrock AgentCore Code Interpreter → 202 { jobId }
+ * (the browser polls /api/agent-jobs/[id]). If the agent can't be started — service
+ * down, agent switched off — or the client asks with { fallback: true } after a failed
+ * job, the single-call LLM review below answers instead (correctness by reading only).
+ *
+ * Quick mode ({ quick: true }): live pair-programming hint, always the LLM.
+ *
+ * LLM review covers:
  * - Correctness
  * - Time/Space complexity
  * - Code quality & best practices
@@ -14,6 +22,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { callGroq } from "@/lib/groq";
 import { safeJsonParse } from "@/lib/utils";
+import { submitAgentJob } from "@/lib/agentJobs";
 
 const CODE_REVIEW_SYSTEM = `You are a senior software engineer conducting a technical interview at a top product company.
 Review the candidate's code submission objectively and thoroughly.
@@ -90,10 +99,20 @@ export async function POST(req: NextRequest) {
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { question, code, language, questionId, sessionId, quick } = body;
+  const { question, code, language, questionId, sessionId, quick, fallback } = body;
 
   if (!code?.trim()) return NextResponse.json({ error: "No code provided" }, { status: 400 });
   if (!question) return NextResponse.json({ error: "Question required" }, { status: 400 });
+
+  if (!quick && !fallback && typeof code === "string" && code.length <= 20_000 && String(question).length >= 10) {
+    const queued = await submitAgentJob(
+      { id: session.user.id, orgId: session.user.orgId, role: session.user.role },
+      "code-assessment",
+      { question: String(question).slice(0, 6000), code, language: language ?? "javascript" },
+    );
+    if (queued.status === 202) return queued;
+    console.warn("[CODE_REVIEW] code-assessment agent unavailable, using LLM review:", queued.status);
+  }
 
   try {
     if (quick) {

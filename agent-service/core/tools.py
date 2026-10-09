@@ -2,9 +2,11 @@
 Tool registry — every external call an agent makes goes through `call_tool`.
 
 Each tool declares, once:
-  - risk:    "read" for everything in agent-service today. Actions with side
-             effects (booking, email) deliberately live in Next.js and only run
-             after a human approves them (see the HITL gates).
+  - risk:    "read" — looks things up, no side effects.
+             "sandbox" — runs untrusted code, but only inside an isolated
+             AgentCore Code Interpreter session (no network, no access to us).
+             Actions with real side effects (booking, email) deliberately live
+             in Next.js and only run after a human approves them (HITL gates).
   - agents:  which agents may call it (least privilege). A call from any other
              agent raises ToolNotAllowed instead of quietly working.
   - timeout: hard per-call limit.
@@ -36,7 +38,7 @@ logger = logging.getLogger("agent.tools")
 # injected instructions; cap what the model reads per call.
 MAX_TOOL_OUTPUT_CHARS = int(os.getenv("MAX_TOOL_OUTPUT_CHARS", "6000"))
 
-Risk = Literal["read"]
+Risk = Literal["read", "sandbox"]
 
 
 class ToolError(RuntimeError):

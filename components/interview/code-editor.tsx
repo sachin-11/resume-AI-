@@ -3,9 +3,10 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
   Code2, Play, Loader2, CheckCircle2, XCircle, AlertCircle,
-  ChevronDown, ChevronUp, Copy, Check, Zap, X,
+  ChevronDown, ChevronUp, Copy, Check, Zap, X, Clock, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { runAgentJob } from "@/lib/agentJobClient";
 import { ensureMonacoInitialized, resetMonacoLoaderForRetry } from "@/lib/monaco-env";
 
 // Monaco Editor — loaded dynamically (heavy, client-only)
@@ -36,7 +37,28 @@ interface CodeReview {
   improvements: string[];
   improvedCode: string;
   summary: string;
+  // Present when the code-assessment agent ran it (AWS Bedrock AgentCore Code Interpreter)
+  execution?: { executed: boolean; engine: string | null; reason: string | null; passed: number; total: number };
+  tests?: TestResult[];
 }
+
+interface TestResult {
+  label: string;
+  input: string;
+  expected: string;
+  got?: string;
+  status: "passed" | "failed" | "error" | "timeout" | "not_run";
+  error?: string;
+  ms?: number | null;
+}
+
+const TEST_STATUS: Record<TestResult["status"], { label: string; className: string }> = {
+  passed:  { label: "Passed",    className: "text-green-400" },
+  failed:  { label: "Wrong answer", className: "text-red-400" },
+  error:   { label: "Error",     className: "text-red-400" },
+  timeout: { label: "Timed out", className: "text-yellow-400" },
+  not_run: { label: "Not run",   className: "text-muted-foreground" },
+};
 
 interface CodeEditorProps {
   question: string;
@@ -152,6 +174,7 @@ export function CodeEditor({
       : STARTER_CODE[initialLanguage && LANGUAGES.some((l) => l.value === initialLanguage) ? initialLanguage : "javascript"]
   );
   const [reviewing, setReviewing] = useState(false);
+  const [reviewStep, setReviewStep] = useState<string | null>(null);
   const [review, setReview] = useState<CodeReview | null>(null);
   const [error, setError] = useState("");
   const [showImproved, setShowImproved] = useState(false);
@@ -252,18 +275,38 @@ export function CodeEditor({
       setError("Write your solution first before submitting for review.");
       return;
     }
-    setReviewing(true); setError(""); setReview(null);
+    setReviewing(true); setError(""); setReview(null); setReviewStep(null);
 
-    const res = await fetch("/api/interview/code-review", {
+    const ask = (fallback = false) => fetch("/api/interview/code-review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, code, language, questionId, sessionId }),
+      body: JSON.stringify({ question, code, language, questionId, sessionId, fallback }),
     });
-    const data = await res.json();
-    setReviewing(false);
 
-    if (!res.ok) { setError(data.error ?? "Review failed"); return; }
-    setReview(data.review);
+    try {
+      const res = await ask();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Review failed");
+      if (data.review) { setReview(data.review); return; }    // agent unavailable: LLM review answered directly
+
+      // Code-assessment agent: runs the code on generated tests in a sandbox; poll for progress.
+      const job = await runAgentJob<{ report: CodeReview }>(
+        async () => new Response(JSON.stringify(data), { status: 202 }),
+        (label) => setReviewStep(label),
+      );
+      if (job.status === "succeeded" && job.result?.report) { setReview(job.result.report); return; }
+
+      setReviewStep("Sandbox unavailable — reviewing by reading the code");
+      const retry = await ask(true);
+      const fallbackData = await retry.json();
+      if (!retry.ok) throw new Error(fallbackData.error ?? "Review failed");
+      setReview(fallbackData.review);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Review failed");
+    } finally {
+      setReviewing(false);
+      setReviewStep(null);
+    }
   }
 
   function handleSubmitAnswer() {
@@ -404,7 +447,7 @@ export function CodeEditor({
             <div className="flex items-center gap-2">
               <Button onClick={runReview} disabled={reviewing} className="gap-2 bg-violet-600 hover:bg-violet-700">
                 {reviewing
-                  ? <><Loader2 className="h-4 w-4 animate-spin" />Reviewing...</>
+                  ? <><Loader2 className="h-4 w-4 animate-spin" />{reviewStep ? `${reviewStep}…` : "Reviewing..."}</>
                   : <><Zap className="h-4 w-4" />AI Review Code</>}
               </Button>
               {review && (
@@ -442,12 +485,57 @@ export function CodeEditor({
                     {review.correctness.isCorrect ? "Correct Solution" : "Incorrect Solution"}
                   </p>
                 </div>
+                {review.execution && (
+                  review.execution.executed ? (
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <ShieldCheck className="h-3.5 w-3.5 text-violet-400" />
+                      {review.execution.passed}/{review.execution.total} tests passed — your code was run in an isolated sandbox
+                    </p>
+                  ) : (
+                    <p className="flex items-center gap-1.5 text-xs text-yellow-400">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      Not executed ({review.execution.reason}). Correctness judged by AI reading the code.
+                    </p>
+                  )
+                )}
                 {review.correctness.issues.map((issue) => (
                   <p key={issue} className="text-xs text-muted-foreground flex items-start gap-2">
                     <span className="text-red-400 mt-0.5">!</span>{issue}
                   </p>
                 ))}
               </div>
+
+              {/* Test results (code-assessment agent) */}
+              {review.tests && review.tests.length > 0 && (
+                <div className="rounded-xl border border-border p-4 space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Test cases</p>
+                  <div className="space-y-1.5">
+                    {review.tests.map((t, i) => {
+                      const st = TEST_STATUS[t.status] ?? TEST_STATUS.error;
+                      const Icon = t.status === "passed" ? CheckCircle2 : t.status === "timeout" ? Clock : XCircle;
+                      return (
+                        <div key={i} className="rounded-lg bg-secondary/60 px-3 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`flex items-center gap-1.5 font-medium ${st.className}`}>
+                              <Icon className="h-3.5 w-3.5" /> {st.label}
+                            </span>
+                            <span className="text-muted-foreground truncate">{t.label}</span>
+                          </div>
+                          <p className="mt-1 font-mono text-muted-foreground break-all">in: {t.input}</p>
+                          {t.status !== "passed" && (
+                            <p className="font-mono break-all">
+                              <span className="text-muted-foreground">expected: </span>{t.expected}
+                              {t.got !== undefined
+                                ? <><span className="text-muted-foreground"> · got: </span>{t.got}</>
+                                : t.error ? <span className="text-muted-foreground"> · {t.error}</span> : null}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Complexity */}
               <div className="rounded-xl border border-border p-4 space-y-2">
