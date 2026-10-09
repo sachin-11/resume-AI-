@@ -11,8 +11,9 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Literal, Optional
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -20,7 +21,7 @@ from langgraph.types import Command
 
 load_dotenv()
 
-from core import jobs, memory, tools
+from core import audit, feedback, flags, guards, jobs, memory, metrics, release, tools
 from core.mcp_pool import pool as mcp_pool
 from core.auth import Caller, get_caller, resolve_user_id
 from core.ratelimit import limited_caller
@@ -84,6 +85,12 @@ async def request_id_middleware(request, call_next):
     return response
 
 
+# ── Guard stops (budget, loop limit, timeout, kill switch) → clear status codes ──
+@app.exception_handler(guards.AgentRunError)
+async def agent_run_error_handler(_request: Request, exc: guards.AgentRunError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc), "code": exc.code})
+
+
 # ── CORS — allow Next.js to call this ───────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -116,7 +123,7 @@ class ImproveResumeRequest(BaseModel):
     user_id: str
     target_role: Optional[str] = None
     job_description: Optional[str] = None
-    max_iterations: int = 3   # how many rewrite loops max
+    max_iterations: int = Field(default=3, ge=1, le=5)   # rewrite loops; capped so a client can't buy an endless loop
 
 
 class ImproveResumeResponse(BaseModel):
@@ -134,7 +141,78 @@ def health():
         "agent": "resume-improvement",
         "llm": "openai" if os.getenv("OPENAI_API_KEY") else "groq",
         "memory": memory.backend,
+        "release": {"alias": release.active()["alias"], "release": release.active()["release"]},
     }
+
+
+@app.get("/version")
+def get_version(caller: Caller = Depends(get_caller)):
+    """What each agent is running: models, prompt-code hash, tools, KB config, fingerprint."""
+    return {"alias": release.active()["alias"], "release": release.active()["release"],
+            "agents": release.all_versions()}
+
+
+# ── Operations (admin only): metrics, kill switch, audit trail ──
+def require_admin(caller: Caller = Depends(get_caller)) -> Caller:
+    if caller.via != "jwt" or caller.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return caller
+
+
+@app.get("/admin/metrics")
+def get_metrics(caller: Caller = Depends(require_admin)):
+    """Per-agent runs, error rate, p50/p95 latency, tokens, cost (this replica), circuit states."""
+    return {**metrics.snapshot(), "circuits": guards.breaker_states()}
+
+
+@app.get("/admin/flags")
+async def get_flags(caller: Caller = Depends(require_admin)):
+    return await flags.snapshot()
+
+
+class FlagRequest(BaseModel):
+    mode: Literal["on", "read_only", "off"]
+    reason: str = Field(default="", max_length=500)
+
+
+@app.put("/admin/flags/{agent}")
+async def put_flag(agent: str, body: FlagRequest, caller: Caller = Depends(require_admin)):
+    """Kill switch: turn an agent (or "*" = all) off / read-only / back on, effective within seconds."""
+    if agent != "*" and agent not in release.AGENT_CODE and agent != "faq":
+        raise HTTPException(status_code=400, detail=f"Unknown agent '{agent}'")
+    row = await flags.set_mode(agent, body.mode, by=caller.user_id, reason=body.reason)
+    audit.record("flag_change", agent=agent, mode=body.mode, reason=body.reason)
+    return {**row, "updated_at": row["updated_at"].isoformat()}
+
+
+@app.get("/admin/audit")
+def get_audit(limit: int = 100, event: Optional[str] = None, caller: Caller = Depends(require_admin)):
+    return {"events": audit.recent(min(limit, 500), event)}
+
+
+class FeedbackRequest(BaseModel):
+    agent: str = Field(max_length=64)
+    rating: Literal["up", "down"]
+    comment: str = Field(default="", max_length=1000)
+    input: str = Field(default="", max_length=8000)      # what the user asked / submitted
+    output: str = Field(default="", max_length=8000)     # what the agent answered
+    version: Optional[str] = Field(default=None, max_length=32)      # usage.version of that run
+    request_id: Optional[str] = Field(default=None, max_length=64)
+    thread_id: Optional[str] = Field(default=None, max_length=64)
+
+
+@app.post("/feedback", status_code=201)
+async def post_feedback(body: FeedbackRequest, caller: Caller = Depends(limited_caller)):
+    """Thumbs up/down on an agent answer. Thumbs-down rows feed the eval dataset (evals/harvest_feedback.py)."""
+    if body.agent not in release.AGENT_CODE:
+        raise HTTPException(status_code=400, detail=f"Unknown agent '{body.agent}'")
+    row = await feedback.save(
+        agent=body.agent, rating=body.rating, comment=body.comment, input=body.input, output=body.output,
+        version=body.version, request_id=body.request_id, thread_id=body.thread_id,
+        user_id=caller.user_id, org_id=caller.org_id,
+    )
+    metrics.record_feedback(body.agent, body.rating)
+    return {"id": row["id"]}
 
 
 @app.get("/tools")
@@ -206,9 +284,11 @@ async def improve_resume(
             usage=usage,
         )
 
-    except Exception as e:
-        print(f"[AGENT ERROR] {e}")
-        raise HTTPException(status_code=500, detail=f"Agent failed: {str(e)}")
+    except guards.AgentRunError:
+        raise
+    except Exception:
+        logging.getLogger("agent").exception("improve-resume failed")
+        raise HTTPException(status_code=500, detail="Agent failed")
 
 
 # ── Run directly ─────────────────────────────────────────────────
@@ -728,6 +808,8 @@ async def resume_thread(thread_id: str, request: ResumeRequest, caller: Caller =
     else:
         if request.approved is None:
             raise HTTPException(status_code=400, detail="approved is required")
+        if request.approved:
+            await flags.ensure_writable("orchestrate")   # read-only mode: no bookings / candidate emails
         offered = {s["slotId"] for s in approval.get("slots", [])}
         if request.approved and request.slot_id not in offered:
             raise HTTPException(status_code=400, detail="slot_id must be one of the proposed slots")
@@ -740,6 +822,8 @@ async def resume_thread(thread_id: str, request: ResumeRequest, caller: Caller =
         output_data=answer,
         scores={"human_override": 1.0 if override else 0.0},
     )
+    audit.record("human_approval", type=request.type, thread_id=thread_id, override=override,
+                 decision=request.decision, approved=request.approved, slot_id=request.slot_id)
 
     logs_before = len(previous.values.get("logs", []))
     final_state, usage = await run_agent(
@@ -794,6 +878,7 @@ async def faq_ingest(
 
     if len(request.text.strip()) < 20:
         raise HTTPException(status_code=400, detail="text too short")
+    await flags.ensure_writable("faq")   # writes to the knowledge base
 
     result = await ingest_policy_doc(request.doc_id, request.title, request.text)
     if not result.get("success"):

@@ -1,0 +1,65 @@
+{
+  "aliases": {
+    "dev": {
+      "release": "2026-10-09.1",
+      "models": {
+        "openai_fast": "gpt-4o-mini-2024-07-18",
+        "openai_reasoning": "gpt-4o-mini-2024-07-18",
+        "groq_fast": "llama-3.3-70b-versatile",
+        "groq_reasoning": "llama-3.3-70b-versatile"
+      },
+      "kb": {
+        "embedding_model": "text-embedding-3-small",
+        "chunk_words": 500,
+        "overlap_words": 100,
+        "top_k": 5,
+        "min_score": 0.3
+      },
+      "canary": {
+        "percent": 0,
+        "models": {}
+      }
+    },
+    "staging": {
+      "release": "2026-10-09.1",
+      "models": {
+        "openai_fast": "gpt-4o-mini-2024-07-18",
+        "openai_reasoning": "gpt-4o-mini-2024-07-18",
+        "groq_fast": "llama-3.3-70b-versatile",
+        "groq_reasoning": "llama-3.3-70b-versatile"
+      },
+      "kb": {
+        "embedding_model": "text-embedding-3-small",
+        "chunk_words": 500,
+        "overlap_words": 100,
+        "top_k": 5,
+        "min_score": 0.3
+      },
+      "canary": {
+        "percent": 0,
+        "models": {}
+      }
+    },
+    "prod": {
+      "release": "2026-10-09.1",
+      "models": {
+        "openai_fast": "gpt-4o-mini-2024-07-18",
+        "openai_reasoning": "gpt-4o-mini-2024-07-18",
+        "groq_fast": "llama-3.3-70b-versatile",
+        "groq_reasoning": "llama-3.3-70b-versatile"
+      },
+      "kb": {
+        "embedding_model": "text-embedding-3-small",
+        "chunk_words": 500,
+        "overlap_words": 100,
+        "top_k": 5,
+        "min_score": 0.3
+      },
+      "canary": {
+        "percent": 0,
+        "models": {}
+      }
+    }
+  },
+  "history": {}
+}

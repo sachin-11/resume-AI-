@@ -207,6 +207,17 @@ uvicorn main:app --reload --port 8000                       # agent service → 
 
 ---
 
+## 10.5 Production mein agent ko control mein kaise rakhte hain
+
+Har agent run ek hi function (`run_agent`) se guzarta hai, isliye saare controls ek jagah lage hain:
+
+- **Version:** model + prompt code + tools + KB config = ek fingerprint (`GET /version`). Models `releases.json` mein dev/staging/prod ke liye pinned hain; rollback = `python -m core.release rollback prod`.
+- **Limits:** har run ka timeout, step limit (loop guard), token aur $ budget; 5 baar lagatar fail ho to agent ka circuit breaker 60s ke liye band.
+- **Kill switch:** admin kisi bhi agent ko `off` ya `read_only` kar sakta hai, bina deploy ke (`PUT /admin/flags/{agent}`).
+- **Audit + metrics:** har tool call aur human approval ka audit log; error rate, p95 latency, cost per agent; error/cost/latency badhe to Slack alert.
+- **Feedback loop:** Copilot mein 👍/👎 → thumbs-down review ke baad eval case ban jaata hai → agli baar wahi galti PR pe hi pakdi jaati hai.
+- **Ops ka playbook:** `agent-service/RUNBOOK.md` (deploy, rollback, throttling, cost alarm, owner).
+
 ## 11. Interviewer ke common sawaal — short jawab
 
 **Q: Sabse mushkil part kya tha?**
@@ -255,4 +266,4 @@ Purana data auto-delete (privacy), baaki lambe features ko bhi job queue par lan
 4. **Ek-do problem + solution** (section 7) — bias wala aur double-booking wala sabse strong hain
 5. Sawaal aaye to **section 6 aur 11**
 
-**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 12 AI agents · 117 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1
+**Yaad rakhne wale numbers:** 34 pages · 108 API routes · 23 database tables · 12 AI agents · 138 tests · evals 100% pass · FAQ ReAct 40% → 100% · GitHub check 4.5s → 0.1s · double-booking 10 → 1

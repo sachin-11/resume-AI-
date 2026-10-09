@@ -4,14 +4,19 @@ FAQ Answerer — Company Docs RAG store (Pinecone)
 Reuses the same Pinecone index as `lib/rag.ts` (`PINECONE_INDEX`, default "resume"),
 tagged with metadata `type: "policy_doc"` so it never collides with resume-chunk vectors.
 
-Chunking mirrors lib/rag.ts: 500-word chunks, 100-word overlap.
+Chunking, retrieval (top_k, min_score) and the embedding model are pinned per
+environment in releases.json ("kb"), so they are versioned with the release.
+Defaults mirror lib/rag.ts: 500-word chunks, 100-word overlap. Changing chunking
+or the embedding model needs the policy docs re-ingested.
 Embeddings: OpenAI `text-embedding-3-small` (1536-dim) if OPENAI_API_KEY is set,
 else a deterministic hash-based pseudo-embedding — same safety-net idea as the TS side,
 just not bit-identical (purely so Pinecone never breaks when no key is configured).
 """
 import os
 import math
-from typing import List
+from typing import List, Optional
+
+from core.release import kb_config
 
 _pc_client = None
 _index = None
@@ -31,7 +36,10 @@ def _get_index():
     return _index
 
 
-def _chunk_text(text: str, chunk_words: int = 500, overlap_words: int = 100) -> List[str]:
+def _chunk_text(text: str, chunk_words: Optional[int] = None, overlap_words: Optional[int] = None) -> List[str]:
+    kb = kb_config()
+    chunk_words = chunk_words or kb["chunk_words"]
+    overlap_words = kb["overlap_words"] if overlap_words is None else overlap_words
     words = text.split()
     if not words:
         return []
@@ -62,7 +70,7 @@ def _embed(text: str) -> List[float]:
     if os.getenv("OPENAI_API_KEY"):
         try:
             from langchain_openai import OpenAIEmbeddings
-            embedder = OpenAIEmbeddings(model="text-embedding-3-small", api_key=os.getenv("OPENAI_API_KEY"))
+            embedder = OpenAIEmbeddings(model=kb_config()["embedding_model"], api_key=os.getenv("OPENAI_API_KEY"))
             return embedder.embed_query(text)
         except Exception:
             pass
@@ -100,7 +108,7 @@ async def ingest_policy_doc(doc_id: str, title: str, text: str) -> dict:
     return {"success": True, "chunksIndexed": len(vectors)}
 
 
-def retrieve_policy_chunks_sync(query: str, top_k: int = 5, min_score: float = 0.3) -> List[dict]:
+def retrieve_policy_chunks_sync(query: str, top_k: Optional[int] = None, min_score: Optional[float] = None) -> List[dict]:
     """Embed the query, retrieve top-k policy-doc chunks, filter by similarity score.
 
     Blocking (embedding + Pinecone clients) — agents reach it through the
@@ -110,6 +118,9 @@ def retrieve_policy_chunks_sync(query: str, top_k: int = 5, min_score: float = 0
     if index is None:
         return []
 
+    kb = kb_config()
+    top_k = top_k or kb["top_k"]
+    min_score = kb["min_score"] if min_score is None else min_score
     query_vec = _embed(query)
     result = index.query(
         vector=query_vec,

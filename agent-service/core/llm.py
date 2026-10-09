@@ -8,6 +8,8 @@ What it adds over constructing ChatOpenAI/ChatGroq directly:
   - A client-side rate limiter per provider (GROQ_MAX_RPS / OPENAI_MAX_RPS), so
     bursts queue up locally instead of hitting the provider's limit.
   - Model tiers ("fast" for routing/judging, "reasoning" for generation).
+  - Canary: a run picked for the canary (core/release.py) gets the canary
+    models from releases.json instead of the pinned ones.
   - Structured output: replies are parsed and validated against a Pydantic
     schema; an invalid reply is sent back to the model once with the error,
     and only after that does the caller's fallback get used — with
@@ -26,6 +28,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
+from core import release
 from core.config import get_settings
 
 logger = logging.getLogger("agent.llm")
@@ -50,31 +53,36 @@ def _rate_limiter(provider: str):
     return InMemoryRateLimiter(requests_per_second=rps, check_every_n_seconds=0.05, max_bucket_size=max(1, rps * 5))
 
 
-def _build_model(provider: str, tier: Tier, temperature: float) -> BaseChatModel:
+def _build_model(provider: str, tier: Tier, temperature: float, variant: str = "stable") -> BaseChatModel:
     s = get_settings()
+    canary = release.canary_model(f"{provider}_{tier}") if variant == "canary" else None
     if provider == "openai":
         from langchain_openai import ChatOpenAI
-        model = s.openai_fast_model if tier == "fast" else s.openai_reasoning_model
+        model = canary or (s.openai_fast_model if tier == "fast" else s.openai_reasoning_model)
         return ChatOpenAI(
             model=model, temperature=temperature, api_key=s.openai_api_key,
             timeout=s.llm_timeout_s, max_retries=s.llm_max_retries, rate_limiter=_rate_limiter("openai"),
         )
     from langchain_groq import ChatGroq
-    model = s.groq_fast_model if tier == "fast" else s.groq_reasoning_model
+    model = canary or (s.groq_fast_model if tier == "fast" else s.groq_reasoning_model)
     return ChatGroq(
         model=model, temperature=temperature, api_key=s.groq_api_key,
         timeout=s.llm_timeout_s, max_retries=s.llm_max_retries, rate_limiter=_rate_limiter("groq"),
     )
 
 
-@lru_cache(maxsize=16)
 def get_llm(temperature: float = 0.3, tier: Tier = "reasoning") -> Runnable:
     """Chat model for `tier`, with every other configured provider as a fallback."""
+    return _get_llm(temperature, tier, release.variant_var.get())
+
+
+@lru_cache(maxsize=32)
+def _get_llm(temperature: float, tier: Tier, variant: str) -> Runnable:
     providers = get_settings().providers
     if not providers:
         raise NoLLMProviderError("No LLM provider configured — set OPENAI_API_KEY and/or GROQ_API_KEY")
 
-    primary, *rest = [_build_model(p, tier, temperature) for p in providers]
+    primary, *rest = [_build_model(p, tier, temperature, variant) for p in providers]
     return primary.with_fallbacks(rest) if rest else primary
 
 

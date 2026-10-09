@@ -98,3 +98,27 @@ FAQ = [
     ("Can I work remotely sometimes?", "2 days", "Work From Home Policy"),
     ("What is the stock option vesting schedule?", None, None),
 ]
+
+
+# ── Regressions from production feedback (evals/harvest_feedback.py) ──
+# Thumbs-down answers, labelled by a person, become permanent gated cases.
+def _load_regressions() -> None:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / "regressions.jsonl"
+    if not path.exists():
+        return
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        case = json.loads(line)
+        if case.get("suite") == "planner":
+            PLANNER.append((case["message"], case["expected"]))
+        elif case.get("suite") == "screening":
+            SCREENING.append((case.get("name", f"regression {n}"), case["resume"], case.get("jd", JD_BACKEND), case["expected"]))
+        else:
+            raise ValueError(f"regressions.jsonl line {n}: unsupported suite {case.get('suite')!r}")
+
+
+_load_regressions()

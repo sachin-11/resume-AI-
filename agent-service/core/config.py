@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
+from core import release
+
 
 def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -32,7 +34,8 @@ class Settings:
     groq_api_key: Optional[str]
 
     # Model per provider per tier. "fast" = routing / judging / scoring,
-    # "reasoning" = generation and analysis. Defaults keep today's models.
+    # "reasoning" = generation and analysis. Pinned per environment in
+    # releases.json (core/release.py); an env var overrides the pin.
     openai_fast_model: str
     openai_reasoning_model: str
     groq_fast_model: str
@@ -63,10 +66,10 @@ def get_settings() -> Settings:
     return Settings(
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         groq_api_key=os.getenv("GROQ_API_KEY") or None,
-        openai_fast_model=os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini"),
-        openai_reasoning_model=os.getenv("OPENAI_REASONING_MODEL", "gpt-4o-mini"),
-        groq_fast_model=os.getenv("GROQ_FAST_MODEL", "llama-3.3-70b-versatile"),
-        groq_reasoning_model=os.getenv("GROQ_REASONING_MODEL", "llama-3.3-70b-versatile"),
+        openai_fast_model=release.pinned_model("openai_fast"),
+        openai_reasoning_model=release.pinned_model("openai_reasoning"),
+        groq_fast_model=release.pinned_model("groq_fast"),
+        groq_reasoning_model=release.pinned_model("groq_reasoning"),
         llm_timeout_s=_int_env("LLM_TIMEOUT_S", 60),
         llm_max_retries=_int_env("LLM_MAX_RETRIES", 2),
         llm_structured_attempts=max(1, _int_env("LLM_STRUCTURED_ATTEMPTS", 2)),

@@ -20,7 +20,7 @@ from agents.shared.eval import evaluate_rag_answer
 from core.guardrails import wrap_untrusted
 from core.observability import trace_guardrail
 import agents.shared.tools  # noqa: F401  (registers the tools)
-from core.tools import call_tool, tools_for
+from core.tools import call_tool, cap_output, tools_for
 
 MAX_SEARCHES = 3
 # create_react_agent doesn't raise at its step budget: it swaps the model's last
@@ -44,7 +44,7 @@ def _render_chunks(_tool: str, chunks: list) -> str:
     if not chunks:
         return "No matching policy documents."
     body = json.dumps([{"title": c.get("title", ""), "text": c.get("text", "")} for c in chunks], ensure_ascii=False)
-    return wrap_untrusted("documents", body)
+    return wrap_untrusted("documents", cap_output(body))
 
 
 async def research_and_answer(state: dict) -> dict:
