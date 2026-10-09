@@ -7,3 +7,6 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+evals/review_queue.jsonl
+evals/report.md
+evals/report.json

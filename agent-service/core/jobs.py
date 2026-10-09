@@ -29,6 +29,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from pydantic import BaseModel, ValidationError
 
 from core.auth import Caller, caller_var
+from core.guards import AgentRunError
 from core.observability import progress_var, request_id_var
 
 logger = logging.getLogger("agent.jobs")
@@ -309,6 +310,9 @@ class JobRunner:
         except HTTPException as e:
             await self.store.finish(job["id"], status="failed", progress=collector.events,
                                     error=str(e.detail), error_code=e.status_code)
+        except AgentRunError as e:   # guard stop: budget, loop limit, run timeout, switched off
+            await self.store.finish(job["id"], status="failed", progress=collector.events,
+                                    error=str(e), error_code=e.status_code)
         except asyncio.TimeoutError:
             await self.store.finish(job["id"], status="failed", progress=collector.events,
                                     error="Agent run timed out", error_code=504)

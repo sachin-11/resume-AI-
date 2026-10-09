@@ -5,7 +5,12 @@ Offline evals against the real LLM — a quality gate for prompt/model changes.
     python -m evals.run_evals --suite planner fairness         # some suites
 
 Writes evals/report.md + evals/report.json and exits 1 if any metric is below its
-threshold, so CI (or a pre-merge check) can block a regression. Costs real
+threshold, so CI (or a pre-merge check) can block a regression. The report names
+the release alias and each agent's version fingerprint (core/release.py), so a
+result always says which prompts + models + tools + KB it was measured on.
+
+To try a candidate model before switching: AGENT_RELEASE_ALIAS=staging, or set
+OPENAI_REASONING_MODEL=... for the run, and compare reports. Costs real
 tokens (~70 small LLM calls with gpt-4o-mini, a few cents).
 """
 import argparse
@@ -27,6 +32,7 @@ os.environ.setdefault("GITHUB_PERSONAL_ACCESS_TOKEN", "")
 from agents.candidate_screening.graph import candidate_screening_agent  # noqa: E402
 from agents.orchestrator.nodes import plan_steps  # noqa: E402
 from evals import cases  # noqa: E402
+from core import release  # noqa: E402
 
 THRESHOLDS = {
     "planner_accuracy": 0.85,
@@ -161,7 +167,12 @@ SUITES = {"planner": eval_planner, "screening": eval_screening, "injection": eva
 
 def write_report(metrics: dict, details: dict, seconds: float) -> bool:
     passed = all(metrics[m] >= THRESHOLDS[m] for m in metrics)
+    versions = {v["agent"]: v["fingerprint"] for v in release.all_versions()
+                if v["agent"] in ("orchestrate", "screen-candidate")}
+    models = sorted(set(release.version("orchestrate")["models"].values()))
     lines = [f"# Agent evals — {'PASS' if passed else 'FAIL'}", "", f"Ran in {seconds:.0f}s.", "",
+             f"Release `{release.active()['alias']}` {release.active()['release']} · models {', '.join(models)} · "
+             + " · ".join(f"{a} `{fp}`" for a, fp in versions.items()), "",
              "| Metric | Score | Threshold | |", "|---|---|---|---|"]
     for m, v in metrics.items():
         lines.append(f"| {m} | {v:.2f} | {THRESHOLDS[m]:.2f} | {'✅' if v >= THRESHOLDS[m] else '❌'} |")
@@ -171,7 +182,8 @@ def write_report(metrics: dict, details: dict, seconds: float) -> bool:
             lines.append(f"| {r['case']} | {r['expected']} | {r['got']} | {'✅' if r['ok'] else '❌'} |")
     (OUT / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     clean = {s: [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows] for s, rows in details.items()}
-    (OUT / "report.json").write_text(json.dumps({"passed": passed, "metrics": metrics, "thresholds": THRESHOLDS,
+    (OUT / "report.json").write_text(json.dumps({"passed": passed, "versions": versions, "models": models,
+                                                  "metrics": metrics, "thresholds": THRESHOLDS,
                                                   "details": clean}, indent=2), encoding="utf-8")
     return passed
 

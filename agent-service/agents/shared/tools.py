@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import Optional
 
 import httpx
 
@@ -112,7 +113,7 @@ async def web_brave_search_mcp(query: str) -> str:
 
 @tool("policy_docs.search", agents={"faq"}, timeout_s=15,
       description="Most relevant company policy-document chunks for a question (Pinecone).")
-async def policy_docs_search(query: str, top_k: int = 5) -> list:
+async def policy_docs_search(query: str, top_k: Optional[int] = None) -> list:
     from agents.faq.store import retrieve_policy_chunks_sync
     # Embedding + Pinecone clients are blocking — keep them off the event loop.
     return await asyncio.to_thread(retrieve_policy_chunks_sync, query, top_k)

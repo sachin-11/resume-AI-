@@ -39,11 +39,42 @@ jobs:
       - run: npx prisma generate
       - run: npx tsc --noEmit
 
+  prompt-changes:
+    # Did this PR touch anything that changes agent behaviour (prompts, models,
+    # guardrails, tools, KB config, eval cases)? If so, the eval gate runs.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.filter.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            agents:
+              - 'agent-service/agent/**'
+              - 'agent-service/agents/**'
+              - 'agent-service/core/llm.py'
+              - 'agent-service/core/config.py'
+              - 'agent-service/core/guardrails.py'
+              - 'agent-service/core/tools.py'
+              - 'agent-service/releases.json'
+              - 'agent-service/evals/**'
+
   agent-evals:
     # Real-LLM evals (planner accuracy, screening agreement, prompt-injection
-    # resistance, counterfactual fairness). Costs a few cents, so: manual or weekly.
-    # Fails the run if any metric drops below its threshold.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # resistance, counterfactual fairness, FAQ grounding, feedback regressions).
+    # Gate: runs on every PR that changes prompts/models/tools/KB config (see
+    # prompt-changes) and fails it if any metric drops below its threshold; also
+    # weekly (catches provider-side model drift) and on demand. Costs a few cents.
+    needs: [prompt-changes]
+    if: >-
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'schedule' ||
+        needs.prompt-changes.outputs.agents == 'true'
+      )
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -52,6 +83,8 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       AGENT_MEMORY: memory
+      # Evaluate exactly what prod would run after this merge.
+      AGENT_RELEASE_ALIAS: prod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,6 +93,9 @@ jobs:
           cache: pip
           cache-dependency-path: agent-service/requirements*.txt
       - run: pip install -r requirements.txt
+      - name: Check LLM keys
+        # PRs from forks get no secrets; fail loudly instead of passing a gate that never ran.
+        run: test -n "$OPENAI_API_KEY$GROQ_API_KEY" || { echo "::error::No LLM API key secret available — evals cannot run."; exit 1; }
       - run: python -m evals.run_evals
       - uses: actions/upload-artifact@v4
         if: always()

@@ -3,7 +3,7 @@ Recruitment Copilot Orchestrator — Nodes
 """
 from typing import Literal, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, model_validator
 
@@ -17,6 +17,9 @@ from core.llm import ainvoke_structured
 
 Intent = Literal["resume_screening", "scheduling", "faq", "other"]
 MAX_STEPS = 3
+# Messages a thread keeps in its checkpoint. Prompts already read only the last
+# 6-10; this stops a long-lived thread's stored state (and its load time) growing forever.
+MAX_THREAD_MESSAGES = 40
 
 
 class PlanStep(BaseModel):
@@ -431,6 +434,13 @@ def _review_reasons(intent: str, result: dict) -> list[str]:
     return reasons
 
 
+def _trimmed(messages: list) -> list:
+    """RemoveMessage ops for the oldest messages, so the thread keeps MAX_THREAD_MESSAGES
+    (counting the reply about to be added)."""
+    excess = len(messages) + 1 - MAX_THREAD_MESSAGES
+    return [RemoveMessage(id=m.id) for m in messages[:excess] if getattr(m, "id", None)] if excess > 0 else []
+
+
 def finalize(state: dict) -> dict:
     """Node: combine every executed step into one response, run the guardrail check,
     and log it to Langfuse (no-op if unconfigured)."""
@@ -478,6 +488,6 @@ def finalize(state: dict) -> dict:
             "needs_human_review": needs_review,
             "review_reasons": reasons,
         },
-        "messages": [AIMessage(content=reply.strip())],
+        "messages": _trimmed(state.get("messages") or []) + [AIMessage(content=reply.strip())],
         "logs": [f"🏁 Orchestrator finalized {len(steps)} step(s)" + (" — 🛡️ flagged for human review" if needs_review else "")],
     }

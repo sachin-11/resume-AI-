@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ApprovalCard, type Approval, type ApprovalAnswer } from "./approval-card";
+import { FeedbackButtons } from "./feedback-buttons";
 import { runAgentJob } from "@/lib/agentJobClient";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -21,6 +22,8 @@ interface Meta {
   reviewReasons?: string[];
   sources?: string[];
   slots?: Slot[];
+  question?: string;   // the user message this answers (sent with feedback)
+  version?: string;    // agent version fingerprint of the run (usage.version)
 }
 
 interface Message {
@@ -91,12 +94,13 @@ interface CopilotResponse {
   result?: StepResult;
   // Multi-step turns (planner + supervisor): every executed step, in order.
   steps?: { intent: string; result: StepResult }[];
+  usage?: { version?: string };
   error?: string;
 }
 
 interface StepResult { sources?: string[]; proposed_slots?: Slot[] }
 
-function metaFrom(data: CopilotResponse): Meta {
+function metaFrom(data: CopilotResponse, question?: string): Meta {
   const steps = data.steps?.length ? data.steps : data.intent ? [{ intent: data.intent, result: data.result ?? {} }] : [];
   return {
     intents: steps.map((s) => s.intent),
@@ -104,6 +108,8 @@ function metaFrom(data: CopilotResponse): Meta {
     reviewReasons: data.review_reasons,
     sources: steps.flatMap((s) => s.result?.sources ?? []),
     slots: steps.flatMap((s) => s.result?.proposed_slots ?? []),
+    question,
+    version: data.usage?.version,
   };
 }
 
@@ -196,7 +202,7 @@ export default function RecruiterCopilotPage() {
       }));
       setPending(data.status === "awaiting_approval" ? data.approval ?? null : null);
       setMessages((p) => [...p, {
-        id: `a-${Date.now()}`, role: "assistant", content: data.reply || "(no reply)", meta: metaFrom(data),
+        id: `a-${Date.now()}`, role: "assistant", content: data.reply || "(no reply)", meta: metaFrom(data, text.trim()),
       }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Copilot failed");
@@ -409,6 +415,10 @@ export default function RecruiterCopilotPage() {
                 {renderContent(msg.content)}
               </div>
               {msg.meta && renderMeta(msg.meta)}
+              {msg.role === "assistant" && msg.meta && (
+                <FeedbackButtons question={msg.meta.question} answer={msg.content}
+                  version={msg.meta.version} threadId={threadId} />
+              )}
             </Card>
           </div>
         ))}
