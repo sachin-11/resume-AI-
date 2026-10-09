@@ -15,6 +15,7 @@ Sources, strongest first:
      CACHE_S seconds; in-memory without Postgres (local dev / tests).
   3. AGENT_READ_ONLY="orchestrate" (or "*")                  → read_only.
 """
+import asyncio
 import logging
 import os
 import time
@@ -33,6 +34,8 @@ CACHE_S = 5.0
 _memory: dict[str, dict] = {}
 _cache: tuple[float, dict[str, dict]] = (0.0, {})
 _table_ready = False
+# Concurrent first writes would race on CREATE TABLE (Postgres rejects the loser).
+_table_lock = asyncio.Lock()
 
 
 def _env_list(name: str) -> set[str]:
@@ -48,16 +51,19 @@ async def _ensure_table(pool) -> None:
     global _table_ready
     if _table_ready:
         return
-    async with pool.connection() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS agent_flags (
-                agent       TEXT PRIMARY KEY,
-                mode        TEXT NOT NULL,
-                reason      TEXT NOT NULL DEFAULT '',
-                updated_by  TEXT,
-                updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-            )""")
-    _table_ready = True
+    async with _table_lock:
+        if _table_ready:
+            return
+        async with pool.connection() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_flags (
+                    agent       TEXT PRIMARY KEY,
+                    mode        TEXT NOT NULL,
+                    reason      TEXT NOT NULL DEFAULT '',
+                    updated_by  TEXT,
+                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                )""")
+        _table_ready = True
 
 
 async def _overrides() -> dict[str, dict]:

@@ -21,7 +21,7 @@ from langgraph.types import Command
 
 load_dotenv()
 
-from core import audit, feedback, flags, guards, jobs, memory, metrics, release, tools
+from core import audit, feedback, flags, guards, jobs, memory, metrics, release, runlog, tools
 from core.mcp_pool import pool as mcp_pool
 from core.auth import Caller, get_caller, resolve_user_id
 from core.ratelimit import limited_caller
@@ -163,6 +163,12 @@ def require_admin(caller: Caller = Depends(get_caller)) -> Caller:
 def get_metrics(caller: Caller = Depends(require_admin)):
     """Per-agent runs, error rate, p50/p95 latency, tokens, cost (this replica), circuit states."""
     return {**metrics.snapshot(), "circuits": guards.breaker_states()}
+
+
+@app.get("/admin/runs")
+async def get_run_history(days: int = 7, caller: Caller = Depends(require_admin)):
+    """Run history for the admin dashboard: daily runs/failures/cost/p95, per-agent health, recent failures."""
+    return await runlog.summary(max(1, min(days, runlog.RETENTION_DAYS)))
 
 
 @app.get("/admin/flags")
