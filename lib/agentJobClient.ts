@@ -41,6 +41,10 @@ const NODE_LABELS: Record<string, string> = {
   rank_candidates: "Ranking the shortlist",
   screen_resume: "Screening resumes",
   collect: "Ranking the results",
+  plan_tests: "Writing test cases from the question",
+  run_reference: "Checking the test cases",
+  run_candidate: "Running your code in a secure sandbox",
+  review_code: "Reviewing code quality",
 };
 
 /** The latest step worth showing, e.g. "Checking GitHub" or "Assessing candidates (37)". */

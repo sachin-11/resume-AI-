@@ -138,4 +138,6 @@ def test_tools_inventory_endpoint(monkeypatch):
     by_name = {t["name"]: t for t in listed}
     assert by_name["github.repos_http"]["agents"] == ["candidate_screening"]
     assert by_name["policy_docs.search"]["agents"] == ["faq"]
-    assert all(t["risk"] == "read" for t in listed)
+    # Nothing with side effects lives here; the one non-"read" tool runs code only inside the sandbox.
+    assert {t["name"]: t["risk"] for t in listed if t["risk"] != "read"} == {"sandbox.run": "sandbox"}
+    assert by_name["sandbox.run"]["agents"] == ["code_assessment"]

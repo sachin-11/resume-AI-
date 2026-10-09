@@ -56,6 +56,7 @@ AGENT_CODE: dict[str, list[str]] = {
     "orchestrate": ["agents/orchestrator", "agents/candidate_screening", "agents/scheduler", "agents/faq"],
     "hiring-committee": ["agents/hiring_committee"],
     "bulk-screening": ["agents/bulk_screening", "agents/candidate_screening"],
+    "code-assessment": ["agents/code_assessment"],
 }
 # Runs that are a continuation of another agent's run share its version and flags.
 AGENT_FAMILY = {"orchestrate-resume": "orchestrate"}

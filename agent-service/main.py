@@ -988,6 +988,31 @@ async def bulk_screening(request: BulkScreeningRequest, caller: Caller) -> dict:
 jobs.register("bulk-screening", BulkScreeningRequest, bulk_screening)
 
 
+# ── Coding assessment: run interview code in AWS Bedrock AgentCore Code Interpreter ──
+from agents.code_assessment.graph import code_assessment_agent  # noqa: E402
+
+
+class CodeAssessmentRequest(BaseModel):
+    question: str = Field(min_length=10, max_length=6000)
+    code: str = Field(min_length=1, max_length=20000)
+    language: Literal["javascript", "typescript", "python", "java", "cpp", "go"] = "javascript"
+
+
+async def code_assessment(request: CodeAssessmentRequest, caller: Caller) -> dict:
+    state = {"question": request.question, "code": request.code, "language": request.language, "logs": []}
+    final_state, usage = await run_agent("code-assessment", code_assessment_agent, state)
+    return {"success": True, "usage": usage, "report": final_state["report"], "logs": final_state["logs"]}
+
+
+@app.post("/assess-code")
+async def assess_code(request: CodeAssessmentRequest, caller: Caller = Depends(limited_caller)):
+    """Grade interview code by running it on generated tests in an isolated sandbox (20-40s; use /jobs from serverless)."""
+    return await code_assessment(request, caller)
+
+
+jobs.register("code-assessment", CodeAssessmentRequest, code_assessment)
+
+
 class JobSubmitRequest(BaseModel):
     agent: str
     input: dict

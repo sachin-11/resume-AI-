@@ -75,7 +75,7 @@ recorded in the audit log. If Postgres itself is down: set `AGENT_KILL_SWITCH=bu
 (or `*`) on Render — env always wins. `AGENT_READ_ONLY=…` does the same for read-only.
 
 Agent names: `improve-resume, screen-candidate, learning-path, panel-interview, market-intelligence,
-daily-ops, job-match, auto-apply, orchestrate, hiring-committee, bulk-screening`, plus `faq` (indexing).
+daily-ops, job-match, auto-apply, orchestrate, hiring-committee, bulk-screening, code-assessment`, plus `faq` (indexing).
 
 ## 5. Alerts and what to do
 
@@ -111,7 +111,22 @@ daily-ops, job-match, auto-apply, orchestrate, hiring-committee, bulk-screening`
 A run stopped by a guard returns `{"detail", "code"}`: `budget_exceeded` (422), `loop_limit` (422),
 `timeout` (504), `agent_unavailable` (503).
 
-## 7. Weekly routine (feedback → evals)
+## 7. Coding assessment agent (AWS Bedrock AgentCore Code Interpreter)
+
+Interview code is graded by running it: `code-assessment` plans tests from the question, gets
+expected outputs by running two reference solutions, then runs the candidate's code on the same
+inputs in a fresh AgentCore Code Interpreter session (no network, `timeout` per run).
+
+| | |
+|---|---|
+| Needs on Render | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` of an IAM user with **only** `infra/agentcore-code-interpreter-policy.json` (three Code Interpreter session actions; `Resource: "*"` because the built-in interpreter's ARN was not confirmed — narrow it once known); optional `AGENTCORE_REGION` (default `us-east-1`) |
+| Languages run | Python (3.12), JavaScript (node), TypeScript (deno). Java/C++/Go: AI review only, marked "not executed" |
+| If AgentCore is down / creds missing | Each request falls back to the AI review (marked "not executed"); the `sandbox.run` tool circuit opens after 3 failures |
+| Switch off | `PUT /admin/flags/code-assessment {"mode":"off"}` → the Next.js route serves the old LLM review |
+| Cost | ~3-4 LLM calls + 3 short sandbox sessions per review (AgentCore bills per second of vCPU/memory) |
+| Quality gate | `python -m evals.run_evals --suite code` — correct solutions must pass every test, buggy ones must not; skipped without AWS creds |
+
+## 8. Weekly routine (feedback → evals)
 
 1. `python -m evals.harvest_feedback` — new thumbs-down answers → `evals/review_queue.jsonl` (git-ignored).
 2. For each real mistake: write the correct outcome, cut the input down to what reproduces it

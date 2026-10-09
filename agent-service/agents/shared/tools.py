@@ -117,3 +117,12 @@ async def policy_docs_search(query: str, top_k: Optional[int] = None) -> list:
     from agents.faq.store import retrieve_policy_chunks_sync
     # Embedding + Pinecone clients are blocking — keep them off the event loop.
     return await asyncio.to_thread(retrieve_policy_chunks_sync, query, top_k)
+
+
+# ── Code sandbox (coding interviews): AWS Bedrock AgentCore Code Interpreter ──
+
+@tool("sandbox.run", agents={"code_assessment"}, risk="sandbox", timeout_s=90,
+      description="Run a command over the given files in a fresh, network-less AgentCore Code Interpreter session.")
+async def sandbox_run(files: dict, command: str, timeout_s: int = 8) -> dict:
+    from agents.code_assessment.sandbox import run
+    return await run(files, command, timeout_s=min(int(timeout_s), 30))
