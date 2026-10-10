@@ -15,6 +15,10 @@ What it adds over constructing ChatOpenAI/ChatGroq directly:
     and only after that does the caller's fallback get used — with
     `fallback_used=True` so the caller can flag the result instead of passing
     a made-up default off as a real AI judgement.
+  - JSON mode (opt-in, `json_mode=True`): the provider's response_format
+    json_object, so the reply is syntactically valid JSON. Needed when the
+    payload is full of quotes/brackets (e.g. generated code and test strings),
+    where free-form replies broke 2 times in 5.
 """
 import json
 import logging
@@ -165,6 +169,12 @@ def _log_usage(name: str, response) -> None:
     )
 
 
+def _json_mode(llm: Runnable, enabled: bool) -> Runnable:
+    """Ask the provider for a JSON object (OpenAI and Groq both accept this). The bound
+    kwarg reaches the fallback provider too. Prompts must mention JSON (they all do)."""
+    return llm.bind(response_format={"type": "json_object"}) if enabled else llm
+
+
 def _give_up(name: str, schema: type[T], fallback: T, error: Optional[str]) -> StructuredResult[T]:
     logger.warning("llm_structured_fallback name=%s schema=%s error=%s", name, schema.__name__, error)
     return StructuredResult(data=fallback, fallback_used=True, error=error)
@@ -178,13 +188,14 @@ async def ainvoke_structured(
     tier: Tier = "reasoning",
     temperature: float = 0.3,
     name: str = "unnamed",
+    json_mode: bool = False,
 ) -> StructuredResult[T]:
     """Call the LLM and return its reply validated against `schema`.
 
     Provider/network errors that survive retries + provider fallback are raised,
     not hidden behind `fallback` — an outage should surface as an error.
     """
-    llm = get_llm(temperature=temperature, tier=tier)
+    llm = _json_mode(get_llm(temperature=temperature, tier=tier), json_mode)
     messages = _as_messages(prompt)
     error = None
     for _ in range(get_settings().llm_structured_attempts):
@@ -206,9 +217,10 @@ def invoke_structured(
     tier: Tier = "reasoning",
     temperature: float = 0.3,
     name: str = "unnamed",
+    json_mode: bool = False,
 ) -> StructuredResult[T]:
     """Sync twin of `ainvoke_structured`, for sync graph nodes."""
-    llm = get_llm(temperature=temperature, tier=tier)
+    llm = _json_mode(get_llm(temperature=temperature, tier=tier), json_mode)
     messages = _as_messages(prompt)
     error = None
     for _ in range(get_settings().llm_structured_attempts):

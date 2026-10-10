@@ -178,7 +178,10 @@ def run_config(
         "request_id": request_id,
     }
     if version:
-        metadata["agent_version"] = version
+        # Langfuse drops propagated metadata values over 200 chars: send the fingerprint and
+        # the release, not the whole manifest (that is at GET /version).
+        metadata["agent_version"] = version["fingerprint"]
+        metadata["agent_release"] = f"{version['alias']}/{version['release']}"
     if user_id:
         metadata["langfuse_user_id"] = user_id
     config = {"callbacks": callbacks, "metadata": metadata, "run_name": agent}

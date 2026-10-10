@@ -64,3 +64,25 @@ def test_persistently_invalid_reply_uses_flagged_fallback(fake_llm):
 def test_sync_variant(fake_llm):
     fake_llm("garbage", '{"score": 42}')
     assert invoke_structured("p", Out, fallback=FALLBACK).data.score == 42
+
+
+def test_json_mode_asks_the_provider_for_a_json_object(monkeypatch):
+    import core.llm
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    class Out(BaseModel):
+        ok: bool
+
+    model = FakeListChatModel(responses=['{"ok": true}', '{"ok": true}'])
+    bound = []
+    real_bind = FakeListChatModel.bind
+
+    def spy(self, **kwargs):
+        bound.append(kwargs)
+        return real_bind(self, **kwargs)
+
+    monkeypatch.setattr(FakeListChatModel, "bind", spy)
+    monkeypatch.setattr(core.llm, "get_llm", lambda temperature=0.3, tier="reasoning": model)
+    asyncio.run(core.llm.ainvoke_structured("Return JSON", Out, fallback=Out(ok=False), json_mode=True))
+    asyncio.run(core.llm.ainvoke_structured("Return JSON", Out, fallback=Out(ok=False)))
+    assert bound == [{"response_format": {"type": "json_object"}}]   # only the opted-in call

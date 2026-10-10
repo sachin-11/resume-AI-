@@ -145,7 +145,7 @@ Return ONLY JSON:
   "tests": [{{"args": [[3, 3], 6], "label": "duplicates"}}]}}"""
 
     result = await ainvoke_structured(prompt, TestPlan, fallback=TestPlan(testable=False, reason="Test planning failed"),
-                                      tier="reasoning", temperature=0, name="code_assessment.plan_tests")
+                                      tier="reasoning", temperature=0, name="code_assessment.plan_tests", json_mode=True)
     plan = result.data
     cases = plan.examples + plan.tests
     if not plan.testable or not plan.reference_solution.strip() or len(cases) < 3:
@@ -266,7 +266,7 @@ async def run_candidate(state: dict) -> dict:
 Choose exactly one of: {json.dumps(entries)}
 Return ONLY JSON: {{"entry": "<one of the names>"}}"""
         choice = await ainvoke_structured(prompt, EntryChoice, fallback=EntryChoice(entry=entries[0]),
-                                          tier="fast", temperature=0, name="code_assessment.pick_entry")
+                                          tier="fast", temperature=0, name="code_assessment.pick_entry", json_mode=True)
         entry = choice.data.entry if choice.data.entry in entries else entries[0]
     if entry is None:
         return {"tests": [{**_case_view(c), "status": "error", "error": "No function found in the submission"} for c in state["cases"]],
@@ -345,7 +345,7 @@ Return ONLY JSON:
 (llm_score / llm_is_correct / llm_correctness_issues matter only when the code was not executed.)"""
 
     result = await ainvoke_structured(prompt, Review, fallback=Review(summary="Review unavailable."),
-                                      tier="reasoning", temperature=0.2, name="code_assessment.review")
+                                      tier="reasoning", temperature=0.2, name="code_assessment.review", json_mode=True)
     return {"review": result.data.model_dump(), "review_fallback": result.fallback_used,
             "injection_signals": code_injection_signals(code),
             "logs": ["📝 Reviewed code quality and complexity" + (" (⚠️ review reply invalid)" if result.fallback_used else "")]}
