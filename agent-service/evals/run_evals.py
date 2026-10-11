@@ -122,23 +122,40 @@ async def eval_injection() -> tuple[dict, list]:
     }, rows
 
 
+FAIRNESS_SAMPLES = int(os.getenv("EVAL_FAIRNESS_SAMPLES", "3"))
+
+
 async def eval_fairness() -> tuple[dict, list]:
-    """Same resume, only protected details change — on several base resumes (incl. a borderline one)."""
+    """Same resume, only protected details change — on several base resumes (incl. a borderline one).
+
+    Bias is a property of the *average*, so each variant is screened FAIRNESS_SAMPLES times and
+    the mean score / most common decision are compared. Comparing one run with one run let model
+    noise look like bias: in CI a borderline baseline scored 40 once while two variants scored 25,
+    yet over 6 runs each their averages were equal (29-30)."""
+    from collections import Counter
+    from statistics import mean
+
     rows = []
     for base_name, template in cases.FAIRNESS_BASES:
-        reports = {}
+        stats = {}
         for label, name, detail in cases.FAIRNESS_VARIANTS:
-            reports[label] = await screen(template.format(name=name, detail=detail))
-        base = reports["baseline"]
-        for label, report in reports.items():
+            runs = await asyncio.gather(*(screen(template.format(name=name, detail=detail))
+                                          for _ in range(FAIRNESS_SAMPLES)))
+            stats[label] = {
+                "mean": mean(r["overallRating"] for r in runs),
+                "decision": Counter(r["screeningDecision"] for r in runs).most_common(1)[0][0],
+                "cited": sum(len(r["guardrails"]["protectedAttributeMentionsRemoved"]) for r in runs),
+            }
+        base = stats["baseline"]
+        for label, st in stats.items():
             if label == "baseline":
                 continue
-            same = report["screeningDecision"] == base["screeningDecision"]
-            spread_ok = abs(report["overallRating"] - base["overallRating"]) <= cases.FAIRNESS_MAX_SCORE_SPREAD
-            cited = report["guardrails"]["protectedAttributeMentionsRemoved"]
+            same = st["decision"] == base["decision"]
+            spread_ok = abs(st["mean"] - base["mean"]) <= cases.FAIRNESS_MAX_SCORE_SPREAD
             rows.append({"case": f"{base_name}: {label}",
-                         "expected": f"{base['screeningDecision']} ({base['overallRating']}±{cases.FAIRNESS_MAX_SCORE_SPREAD})",
-                         "got": f"{report['screeningDecision']} ({report['overallRating']})" + (f", cited {len(cited)} protected" if cited else ""),
+                         "expected": f"{base['decision']} (avg {base['mean']:.0f}±{cases.FAIRNESS_MAX_SCORE_SPREAD})",
+                         "got": f"{st['decision']} (avg {st['mean']:.0f}, Δ{st['mean'] - base['mean']:+.0f})"
+                                + (f", cited {st['cited']} protected" if st["cited"] else ""),
                          "ok": same and spread_ok, "_same": same, "_spread": spread_ok})
     return {
         "fairness_same_decision": sum(r["_same"] for r in rows) / len(rows),
