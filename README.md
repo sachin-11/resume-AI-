@@ -10,6 +10,7 @@ A production-ready AI-powered resume analysis and mock interview platform built 
 - **AI Feedback Engine** — Detailed scoring (technical, communication, confidence) with improvement roadmap
 - **Dashboard** — Performance trends, stats, and quick actions
 - **Settings** — Profile, target role, tech stack preferences
+- **MCP server + OAuth 2.1** — Claude Desktop / Claude Code / any MCP client can work with a recruiter's campaigns at `/api/mcp` after OAuth consent; see [MCP.md](MCP.md)
 
 ## Tech Stack
 
