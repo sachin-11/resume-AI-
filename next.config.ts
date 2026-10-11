@@ -29,10 +29,10 @@ const nextConfig: NextConfig = {
     JSEARCH_API_KEY: process.env.JSEARCH_API_KEY,
     NEXT_PUBLIC_HAS_JSEARCH: process.env.NEXT_PUBLIC_HAS_JSEARCH,
     // MCP server + OAuth (Amplify only exposes env vars listed here to server code).
-    // MCP_OAUTH_ALLOW_LOCAL_CIMD is deliberately absent: dev-only, never in a production build.
+    // Deliberately absent: MCP_OAUTH_ALLOW_LOCAL_CIMD (dev-only) and MCP_PUBLIC_URL — in production the
+    // MCP issuer/audience must be NEXTAUTH_URL's domain (the consent screen needs that login cookie).
     MCP_TOKEN_SECRET: process.env.MCP_TOKEN_SECRET,
     MCP_STATE_SECRET: process.env.MCP_STATE_SECRET,
-    MCP_PUBLIC_URL: process.env.MCP_PUBLIC_URL,
     MCP_SEND_EMAILS: process.env.MCP_SEND_EMAILS,
   },
 };
