@@ -39,6 +39,68 @@ jobs:
       - run: npx prisma generate
       - run: npx tsc --noEmit
 
+  mcp-e2e:
+    # The MCP server end to end, through the official MCP client SDK: contract
+    # (tools/resources/prompts, scopes, confirmation round trip, isolation) and the
+    # full OAuth 2.1 flow (discovery, DCR + CIMD, PKCE, consent, refresh rotation,
+    # revocation). Real Postgres, real Next.js server, no external services, no cost.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: resume_ai_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/resume_ai_ci
+      NEXTAUTH_URL: http://localhost:3100
+      MCP_PUBLIC_URL: http://localhost:3100
+      # Throwaway values: this server only lives for the length of the job.
+      NEXTAUTH_SECRET: ci-nextauth-secret-not-used-anywhere-else
+      MCP_TOKEN_SECRET: ci-mcp-token-secret-not-used-anywhere-else
+      MCP_STATE_SECRET: ci-mcp-state-secret-not-used-anywhere-else
+      MCP_SEND_EMAILS: "false"
+      MCP_OAUTH_ALLOW_LOCAL_CIMD: "true"   # dev server only; lets the CIMD test use a localhost client id
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - name: Seed test data
+        run: node scripts/mcp-seed.mjs | tee seed.json
+      - name: Start the web app
+        run: |
+          npx next dev --webpack -p 3100 > next.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf -o /dev/null http://localhost:3100/.well-known/oauth-protected-resource/api/mcp && break
+            sleep 2
+          done
+          curl -sf -o /dev/null http://localhost:3100/.well-known/oauth-protected-resource/api/mcp || { tail -50 next.log; exit 1; }
+          # Compile the MCP + OAuth routes once so the first test call doesn't time out on dev compilation.
+          curl -s -o /dev/null -X POST http://localhost:3100/api/mcp || true
+          curl -s -o /dev/null http://localhost:3100/.well-known/oauth-authorization-server || true
+      - name: MCP contract tests
+        run: node scripts/mcp-smoke.mjs --user "$(jq -r .user seed.json)" --other-user "$(jq -r .otherUser seed.json)"
+      - name: Tool definitions match the eval snapshot
+        # Tool descriptions are prompts for external LLMs; a changed tool must refresh
+        # agent-service/evals/mcp_tools.json, which also triggers the eval gate (mcp_tools suite).
+        run: node scripts/mcp-tools-snapshot.mjs --user "$(jq -r .user seed.json)" --check
+      - name: MCP OAuth end-to-end tests
+        run: node scripts/mcp-oauth-e2e.mjs --user "$(jq -r .user seed.json)"
+      - name: Server log (on failure)
+        if: failure()
+        run: tail -150 next.log
+
   prompt-changes:
     # Did this PR touch anything that changes agent behaviour (prompts, models,
     # guardrails, tools, KB config, eval cases)? If so, the eval gate runs.

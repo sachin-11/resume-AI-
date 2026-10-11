@@ -8,7 +8,7 @@ import {
   BarChart3, Settings, LogOut, Brain, ChevronRight,
   User, Users, Shield, BookOpen, Zap, CreditCard,
   Sparkles, Headphones, Menu, X, Sun, Moon,
-  Briefcase, Bot, Wand2, Home, Target, Workflow,
+  Briefcase, Bot, Wand2, Home, Target, Workflow, Plug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,7 @@ const RECRUITER_NAV = [
   { href: "/question-bank",     label: "Question Bank",     icon: BookOpen },
   { href: "/team",              label: "Team",              icon: Shield },
   { href: "/settings/webhooks", label: "Webhooks",          icon: Zap },
+  { href: "/settings/connected-apps", label: "Connected AI apps", icon: Plug },
   { href: "/billing",           label: "Billing",           icon: CreditCard },
   { href: "/settings",          label: "Settings",          icon: Settings },
 ] as const;
@@ -69,6 +70,7 @@ const ADMIN_NAV = [
   { href: "/question-bank",     label: "Question Bank",     icon: BookOpen },
   { href: "/team",              label: "Team",              icon: Shield },
   { href: "/settings/webhooks", label: "Webhooks",          icon: Zap },
+  { href: "/settings/connected-apps", label: "Connected AI apps", icon: Plug },
   // Admin
   { href: "/admin",             label: "Admin Panel",       icon: Shield },
   { href: "/billing",           label: "Billing",           icon: CreditCard },

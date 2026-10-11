@@ -85,6 +85,7 @@ daily-ops, job-match, auto-apply, orchestrate, hiring-committee, bulk-screening,
 | ⛔ `breaker:<agent>` | 5 failed runs in a row; agent paused 60s, then one trial run | Same as above. The breaker closes by itself after a successful run. |
 | 🟠 `latency:<agent>` | Provider slow, Groq rate limiting (`GROQ_MAX_RPS`), big fan-out | Langfuse → slowest spans. Lower `COMMITTEE_MAX_CONCURRENCY`, or move load to OpenAI. |
 | 💸 `daily_cost` | Abuse, a loop, a pricier model | `/admin/metrics` → `cost_usd` per agent → throttle or switch off the top spender; check `budget_exceeded` counts and Langfuse for repeated calls. |
+| 🧷 `mcp_pin:<server>:<tool>` | An upstream MCP server changed a tool's description/schema (possible tool poisoning) | The tool is refused until reviewed. Diff it (`python -m core.mcp_pool pin <server>` vs `mcp_pins.json`); if benign, commit the new pin and redeploy. Full MCP runbook: `MCP.md`. |
 
 ## 6. Limits and throttling (Render env vars)
 

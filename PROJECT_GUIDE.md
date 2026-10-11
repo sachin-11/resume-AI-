@@ -10,7 +10,7 @@
 > "Maine **AI Resume Coach** banaya hai — ek AI-powered hiring platform.
 > **Job seekers** ke liye: resume analysis, AI mock interviews (voice + video), aur job-apply tools.
 > **Recruiters** ke liye: bulk AI interviews, candidate screening, aur ek **AI Recruitment Copilot** jo chat se kaam karta hai — 'is candidate ko screen karo, achha ho to interview book karo'.
-> Frontend aur main backend **Next.js** mein hai, aur AI agents ek alag **Python service (LangGraph)** mein. Database **PostgreSQL** hai, aur sab AWS + Railway par deployed hai."
+> Frontend aur main backend **Next.js** mein hai, aur AI agents ek alag **Python service (LangGraph)** mein. Database **PostgreSQL** hai, frontend AWS Amplify par, agent service Render par, database Neon (PostgreSQL) par deployed hai."
 
 ---
 
@@ -32,7 +32,7 @@
         ▼
 ┌───────────────────┐        ┌─────────────────────────┐
 │   Next.js app     │ ─────► │  Python Agent Service   │
-│  (AWS Amplify)    │  JWT   │  (Railway, LangGraph)   │
+│  (AWS Amplify)    │  JWT   │  (Render, LangGraph)    │
 │                   │        │                         │
 │ • Saare pages     │        │ • AI agents             │
 │ • Login, billing  │        │ • Multi-step kaam       │
@@ -190,8 +190,8 @@ Recruiter likhta hai: **"Asha ko screen karo, shortlist ho to interview book kar
 3. Build ke baad database migrations apply (`prisma migrate deploy`)
 4. Live
 
-**Agent service (Python) → Railway**
-1. Push → Railway Python install karta hai, `requirements.txt` se libraries
+**Agent service (Python) → Render** (master pe auto-deploy)
+1. Push → Render Python install karta hai, `requirements.txt` se libraries
 2. Server start (`uvicorn`)
 3. Health check `/health` — fail ho to auto restart
 4. Start hote hi apni tables khud bana leta hai (memory, jobs)
