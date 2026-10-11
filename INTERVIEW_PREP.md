@@ -178,12 +178,93 @@ Browser ──► Next.js (AWS Amplify) ──JWT──► Python agent-service 
 
 ---
 
+## 6.5 MCP — Resume-AI ka apna MCP server (naya kaam)
+
+### Ek line mein
+> "I built an MCP server for the platform, so a recruiter can work with their own hiring pipeline from any MCP client — list candidates, read interview results, run AI screening and book interviews — with OAuth scopes and a human confirmation before anything that emails a candidate."
+
+### MCP kya hai (simple)
+- **MCP = AI ke liye USB port.** Ek standard tarika jisse koi bhi AI app (Claude Desktop, Claude Code, apna agent) kisi bhi system ke tools aur data use kar sake — har app ke liye alag integration likhne ki zaroorat nahi.
+- **Teen roles:** **Host** (jo app user chalata hai, jaise Claude Desktop) → uske andar **Client** → jo **Server** se baat karta hai (humara Resume-AI server).
+- **Server teen cheezein deta hai:**
+  - **Tools** = kaam (model chalata hai): `search_candidates`, `book_interview`…
+  - **Resources** = padhne ka data (app/user chunta hai): `campaign://{id}`, `candidate://{id}`, hiring policy
+  - **Prompts** = tayyar templates (user chunta hai): "review-campaign", "interview-kit"
+
+### Kya banaya (asli numbers)
+| Cheez | Detail |
+|---|---|
+| Endpoint | `/api/mcp` — Next.js route, official TypeScript SDK v2 |
+| Protocol | Latest spec **2026-07-28** (stateless) + purane 2025 clients bhi chalte hain |
+| Tools | 8 — 4 read-only, 3 AI kaam (agent-service ke LangGraph agents chalate hain), 1 destructive (`book_interview`) |
+| Resources | 2 templates + 1 static policy doc, cache hints ke saath |
+| Prompts | 2, **autocomplete** ke saath (recruiter ke apne campaign names) |
+| Test | Official MCP client se **26-check contract test** — sab pass (local) |
+
+### Concepts jo use kiye (har ek ka "kyun")
+| Concept | Kyun / kaise |
+|---|---|
+| **Stateless protocol (2026-07-28)** | Har request apni version + client info khud le ke aati hai, koi session nahi. Serverless (AWS Amplify) pe perfect — koi bhi instance koi bhi request le sakta hai |
+| **Tool annotations** | `readOnlyHint`, `destructiveHint`, `idempotentHint` — client ko pata chalta hai kaunsa tool khatarnak hai, wo extra confirmation maang sakta hai |
+| **Structured output** | Har tool ka `outputSchema` + `structuredContent` — AI ko text nahi, pakka JSON milta hai |
+| **Pagination** | Opaque cursor, deterministic order — badi lists ek baar mein nahi |
+| **Progress + cancellation** | AI screening ~10s: har graph step ka progress client ko jaata hai; client cancel kare to polling turant rukti hai |
+| **Job handles** | Lamba kaam (ranking, minutes) → tool turant ek handle deta hai, `get_job_result` se baad mein result. Ye naye spec ka recommended stateless tareeka hai |
+| **Scopes per tool** | `candidates:read`, `screening:run`, `interviews:write`. Read-only token se booking try → **403 insufficient_scope** → client sirf wahi extra permission maangta hai (incremental consent) |
+| **MRTR (Multi Round-Trip Requests)** | Naye spec mein server beech mein client se kuch "pooch" nahi sakta; wo `input_required` result lautata hai, client jawab le ke **wahi call dobara** bhejta hai |
+| **Elicitation (human confirmation)** | `book_interview` pehle recruiter se confirm karwata hai. 3 tarike, client ki capability dekh ke: **form**, **URL-mode**, aur purane clients ke liye **approval link** |
+| **Signed requestState** | MRTR ka state client ke through ghoomta hai, to use **HMAC se sign** kiya aur **user se bind** kiya — client badal nahi sakta, doosra user replay nahi kar sakta |
+| **No token passthrough** | Recruiter ka MCP token agent-service ko kabhi nahi jaata; wahan ke liye alag service token banta hai (confused-deputy attack se bachav) |
+| **Audience check** | Token sirf `…/api/mcp` ke liye maana jaata hai — kisi aur service ka token yahan nahi chalega |
+| **Security basics** | Origin header check (DNS rebinding), rate limit, har tool call ka audit log (arguments ka sirf hash), candidate emails masked |
+
+### Sabse achhi kahani — "approval link" kyun bana
+- **Kya hua:** contract test mein purane (2025) client se booking pe error aaya — *"cannot request input: per-request legacy serving cannot receive server-to-client requests"*.
+- **Kyun:** purane protocol mein server ko beech mein client se poochne ke liye **session** chahiye, aur hum stateless hain. Aur aaj bhi kai clients (Claude Desktop) purane protocol pe hain.
+- **Kya kiya:** aise clients ko tool ek **approval link** deta hai. Recruiter browser mein login karke "Approve" dabata hai — **booking wahi hoti hai, AI ke kehne se nahi**. AI dobara poochhe to "already booked".
+- **Kyun ye form se bhi safe hai:** form ka jawab client deta hai (theory mein AI bhi bhar sakta hai); approval button sirf recruiter ke logged-in browser mein hai.
+- **Achhi baat:** galti safe tareeke se fail hui — booking hui hi nahi, saaf error aaya.
+
+### Ek imaandar seekh (poochein to bolo)
+> "In my first test run an email actually went out — I'd restarted the dev server with SMTP disabled, but the restart failed and the old server, with SMTP on, kept serving. It went to a reserved example.com address, so it reached no one, but it taught me two things: verify the process you think you're testing, and make side effects explicit — I added an `MCP_SEND_EMAILS=false` dry-run switch, and the contract test now asserts no email left the server."
+
+### Kya ABHI baaki hai (yeh zaroor pata ho)
+- **Apna OAuth 2.1 server** (login, consent screen, PKCE, Client ID Metadata Documents) — abhi testing dev-token script se hoti hai. **Iske bina Claude Desktop se connect nahi hota.**
+- `subscriptions/listen` (live updates), Python agent-service ko official MCP client pe le jaana, CI mein contract test, OpenTelemetry tracing.
+- Production deploy abhi nahi hua — sab local pe test hua hai.
+
+### Counter questions
+**Q: MCP aur normal REST API mein kya farak hai?**
+> "REST is built for a specific frontend. MCP is a standard for AI clients: the client discovers tools at runtime, gets JSON Schemas and annotations so the model knows how and when to call them, and the protocol has AI-specific pieces — asking the user mid-call, progress, scopes the client can request on demand. Any MCP host can use my server without custom code."
+
+**Q: AI khud booking approve kar de to?**
+> "It can't. book_interview is marked destructive, needs the `interviews:write` scope, and always asks for a human confirmation. For older clients the confirmation is an approval link that only works in the recruiter's logged-in browser — the booking happens there, not in the tool."
+
+**Q: Sampling kyun use nahi kiya?**
+> "Sampling is deprecated in the 2026-07-28 spec — the guidance is to call the model provider directly. My server calls its own LLM through agent-service, so it doesn't need to borrow the client's model."
+
+**Q: Roots / Logging?**
+> "Both deprecated in 2026-07-28. My server works on campaign and candidate ids passed as tool arguments, not file-system roots; and for logs I use structured audit lines and tracing instead of MCP logging."
+
+**Q: Stateless kyun?**
+> "It runs on serverless (AWS Amplify): any instance can take any request, nothing to pin or lose. Cross-call state is explicit — a signed `requestState` for confirmations and a job handle for long work."
+
+**Q: MCP server pe prompt injection?**
+> "Two directions. Candidate text inside results is data — the server's instructions say so and the platform already detects injection in resumes and answers. And the server never treats the client's text as authority: scopes, ownership checks and the human confirmation are enforced in code."
+
+**Q: Ek recruiter doosre ka data dekh sakta hai?**
+> "No — every query is scoped to the token's user in one data layer; the contract test checks that another user gets 'not found'."
+
+**Q: Kitne log ise use karte hain?**
+> "Nobody in production yet — it's tested locally with the official MCP client; the OAuth server and deployment are the next steps."
+
 ## 7. Mat bolna (trap)
 
 - ❌ "Thousands of users" / "production traffic" — sach: 6 users.
 - ❌ "100% fair" / "bias-free" — sach: test set pe ±2, aur ek watch list hai.
 - ❌ "Maine AI tools use nahi kiye" — agar kiye hain to maano, aur bolo ki faisle tumhare the.
 - ❌ "Railway pe deployed" — agent-service **Render** pe hai, frontend **AWS Amplify** pe, DB **Neon**.
+- ❌ "Claude Desktop se connected hai" / "MCP production mein hai" — sach: local pe tested, OAuth aur deploy baaki.
 - ❌ Koi number jo is file mein nahi hai.
 
 ---
@@ -194,4 +275,5 @@ Browser ──► Next.js (AWS Amplify) ──JWT──► Python agent-service 
 2. Architecture diagram ek kaagaz pe banao (section 2).
 3. Teen kahaniyan (section 4) — har ek 1 minute mein.
 4. Section 6 mein se ye 5 pakke karo: scale, ownership, AgentCore kyun, fairness, kamzoriyan.
+4b. Section 6.5 (MCP): "MCP kya hai", approval link wali kahani, aur "kya baaki hai" — teeno pakke karo.
 5. Code mein ek baar dekh lo: `agent-service/core/observability.py` (`run_agent`), `agent-service/agents/code_assessment/nodes.py`, `agent-service/evals/run_evals.py`.
