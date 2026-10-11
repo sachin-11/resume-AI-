@@ -23,6 +23,7 @@ class CodeAssessmentState(TypedDict, total=False):
     skip_reason: str
     plan: dict
     cases: List[dict]         # args (+ expected once the reference has run)
+    mutation: Optional[dict]  # {mistakes, caught, tests_added}
     entry: Optional[str]
     tests: List[dict]
     run_notes: List[str]

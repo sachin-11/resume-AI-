@@ -8,6 +8,8 @@ rank_candidates: deterministic. Composite score + explicit rules decide the
   shortlist; candidates with integrity or data problems are never auto-shortlisted,
   they go to "needs review". The recruiter confirms the final list.
 """
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from core.guardrails import (
@@ -25,7 +27,16 @@ POLICY = ("composite = 60% interview score + 40% committee fit score; candidates
           "protected-attribute remark are never auto-shortlisted — they need a recruiter's review.")
 
 
+class AnswerGrade(BaseModel):
+    question: str = ""
+    grade: Literal["strong", "partial", "weak", "empty"]
+    evidence: str = ""
+
+
 class CandidateAssessment(BaseModel):
+    # Graded per answer before the overall score, so the score rests on the answers
+    # (an example number in the prompt used to anchor every candidate at the same value).
+    answer_grades: list[AnswerGrade] = []
     fit_score: Score
     strengths: StrList = []
     concerns: StrList = []
@@ -41,12 +52,21 @@ async def assess_candidate(task: dict) -> dict:
     signals = detect_injection(answers)
 
     prompt = f"""You are on a hiring committee for the role: {task['role']}.
-Assess how well this candidate fits the role, based on their interview. Return ONLY valid JSON:
+Assess how well this candidate fits the role, based on THEIR ANSWERS below.
+
+First grade every answer on its own:
+- "strong":  correct, specific, shows real experience (mechanisms, trade-offs, concrete examples)
+- "partial": right direction but vague, generic or missing the key point
+- "weak":    wrong, off-topic or a single generic phrase
+- "empty":   no real answer ("not sure", blank)
+Then set fit_score from those grades using the rubric. Two candidates with clearly different answers
+must not get the same score. Return ONLY valid JSON in this shape (values are placeholders):
 {{
-  "fit_score": 72,
-  "strengths": ["Explained database indexing trade-offs with a concrete example"],
-  "concerns": ["Vague on system design scaling questions"],
-  "summary": "one or two sentences a recruiter can act on"
+  "answer_grades": [{{"question": "<short question>", "grade": "strong|partial|weak|empty", "evidence": "<what in the answer shows it>"}}],
+  "fit_score": <0-100 from the rubric>,
+  "strengths": ["<specific strength, citing an answer>"],
+  "concerns": ["<specific gap, citing an answer>"],
+  "summary": "<one or two sentences a recruiter can act on>"
 }}
 
 fit_score rubric (fit for THIS role, not general ability):
@@ -60,6 +80,8 @@ fit_score rubric (fit for THIS role, not general ability):
 
 Job description: {(task.get('job_description') or '(not provided — judge against the role title)')[:1500]}
 
+Context only — the platform's automatic interview scores are already counted separately in the
+composite; do NOT copy them into fit_score, judge the answers yourself:
 Interview results from the platform: overall {c.get('overall_score')}/100, technical {c.get('technical_score')},
 communication {c.get('communication_score')}, confidence {c.get('confidence_score')}.
 Platform feedback summary: {str(c.get('summary', ''))[:600]}
@@ -73,6 +95,7 @@ Platform-noted strengths: {c.get('strengths', [])[:6]}  ·  weak areas: {c.get('
         fallback=CandidateAssessment(fit_score=0, summary="Committee assessment unavailable — review manually."),
         temperature=0,
         name="committee.assess",
+        json_mode=True,
     )
     a = result.data
     strengths, removed_s = strip_protected(a.strengths)

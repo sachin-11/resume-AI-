@@ -28,8 +28,20 @@ _INJECTION_PATTERNS = [
     ("prompt probing", r"\bsystem prompt\b|\bdeveloper message\b"),
     ("score manipulation", r"\b(rate|score|mark|grade)\b.{0,25}\b(me|this candidate|the candidate|this resume)\b.{0,20}\b(100|10/10|9\d|perfect|highest|maximum)"),
     ("decision manipulation", r"\b(you must|you should|please|always)\s+(shortlist|hire|select|approve|pass)\b"),
-    ("output tampering", r"[\"']?(screening_decision|match_score|technical_score|verdict)[\"']?\s*[:=]"),
-    ("fake markup", r"</?\s*(system|assistant|instructions?|prompt)\s*>"),
+    ("output tampering", r"[\"']?(screening_decision|match_score|technical_score|verdict)[\"']?\s*[:=]"
+                         r"|\bdecision\s*[:=]\s*(shortlist|hire|select|approve)"),
+    ("fake markup", r"</?\s*(system|assistant|instructions?|prompt)\s*>"
+                    r"|<!--.{0,200}?\b(system|assistant|instructions?|shortlist|decision|score)\b"),
+    # Found by the eval (Phase 2): candidates write in Hindi/Hinglish too, and claim authority.
+    ("instruction override (hi)", r"\binstructions?\b.{0,20}\b(ignore|bhool|nazarandaz)\s*(karo|kar do|kariye|kijiye|karein)\b"
+                                  r"|\b(ignore|bhool)\s+(karo|kar do)\b.{0,40}\binstructions?\b"
+                                  r"|निर्देश.{0,40}(अनदेखा|नज़रअंदाज़|नजरअंदाज|भूल)|(अनदेखा|नज़रअंदाज़|नजरअंदाज|भूल).{0,40}निर्देश"),
+    ("decision manipulation (hi)", r"\bshortlist\s+(karo|kar do|kijiye|karein|kariye)\b|शॉर्टलिस्ट\s*कर"),
+    ("authority claim", r"\b(recruiter|hiring manager|hr|interviewer)['’]?s?\s+(note|comment|remark)\s*:"
+                        r"|\bwithout further (screening|review|evaluation)\b"
+                        r"|\b(candidate|applicant)\b.{0,20}\bpre-?approved\b|\bpre-?approved\b.{0,30}\b(candidate|applicant|for (this|the) (role|position))"),
+    ("system override", r"\bsystem override\b|\b(admin|policy)\s+(override|update|notice)\s*[:!]|\bhiring policy (updated|changed)\b"
+                        r"|\bmust be (shortlisted|hired|selected|approved)\b"),
 ]
 _INJECTION_RE = [(label, re.compile(p, re.IGNORECASE | re.DOTALL)) for label, p in _INJECTION_PATTERNS]
 _HIDDEN_CHARS = re.compile(r"[​-‏⁠-⁤﻿]")

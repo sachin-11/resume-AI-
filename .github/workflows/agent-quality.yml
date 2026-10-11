@@ -64,7 +64,10 @@ jobs:
 
   agent-evals:
     # Real-LLM evals (planner accuracy, screening agreement, prompt-injection
-    # resistance, counterfactual fairness, FAQ grounding, feedback regressions).
+    # resistance, counterfactual fairness, FAQ grounding, coding assessment in the
+    # AgentCore sandbox, feedback regressions). Every case runs 3x so a case that
+    # fails only sometimes is reported as flaky instead of slipping through, and a
+    # metric more than 0.05 below evals/baseline.json fails the run.
     # Gate: runs on every PR that changes prompts/models/tools/KB config (see
     # prompt-changes) and fails it if any metric drops below its threshold; also
     # weekly (catches provider-side model drift) and on demand. Costs a few cents.
@@ -82,6 +85,11 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      # IAM user agentcore-ci: only the three Code Interpreter session actions.
+      # Without these secrets the code suite is skipped (and says so in the log).
+      AWS_ACCESS_KEY_ID: ${{ secrets.AGENTCORE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AGENTCORE_AWS_SECRET_ACCESS_KEY }}
+      AGENTCORE_REGION: us-east-1
       AGENT_MEMORY: memory
       # Evaluate exactly what prod would run after this merge.
       AGENT_RELEASE_ALIAS: prod
@@ -96,7 +104,7 @@ jobs:
       - name: Check LLM keys
         # PRs from forks get no secrets; fail loudly instead of passing a gate that never ran.
         run: test -n "$OPENAI_API_KEY$GROQ_API_KEY" || { echo "::error::No LLM API key secret available — evals cannot run."; exit 1; }
-      - run: python -m evals.run_evals
+      - run: python -m evals.run_evals --repeats 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:

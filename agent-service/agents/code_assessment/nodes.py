@@ -15,6 +15,9 @@ whether it looks correct.
                  wrong reference) and is dropped; if a reference contradicts an
                  example stated in the question, all tests are distrusted and the
                  agent falls back to review.
+                 Then the tests are tested: one deliberately wrong solution per
+                 common mistake runs on them; a mistake no test catches triggers one
+                 round of extra, reference-checked tests ("mutation check").
   run_candidate  Runs the candidate's function on the same inputs in sandbox #2
                  (fresh session, no network, per-run timeout, restarts after a
                  test that hangs). Outputs are compared here, outside the sandbox.
@@ -26,13 +29,15 @@ Languages the sandbox runs: Python, JavaScript (node), TypeScript (deno). Others
 (Java, C++, Go) and sandbox outages get an LLM-only review, clearly marked
 "not executed".
 """
+import ast
+import asyncio
 import json
 import logging
 import os
 import re
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import agents.shared.tools  # noqa: F401  (registers the tools)
 from agents.code_assessment import harness
@@ -47,6 +52,12 @@ AGENT = "code_assessment"
 RUN_TIMEOUT_S = int(os.getenv("CODE_RUN_TIMEOUT_S", "8"))
 MAX_RUNS = 4                 # restarts after hung tests, per side
 MAX_TESTS_JSON = 20_000      # keep inputs small: interview problems, not load tests
+MIN_TESTS = 5
+# A question that says the result must be sorted / in order can't be graded order-insensitively:
+# the model once chose "unordered" for "return the merged intervals sorted by start", which let
+# a solution that forgets to sort pass.
+_ORDER_MATTERS = re.compile(r"\bsorted\b|\bin (ascending|descending|sorted|the same|original) order\b|\border matters\b",
+                            re.IGNORECASE)
 CODE_LIMIT = 12_000
 
 
@@ -58,6 +69,80 @@ class TestCase(BaseModel):
     expected: Optional[Any] = None   # only for examples stated in the question
 
 
+_SORTED_WORD = re.compile(r"\bsorted\b", re.IGNORECASE)
+_OUTPUT_WORDS = re.compile(r"\b(return|returns|output|print)\b", re.IGNORECASE)
+_INPUT_WORDS = re.compile(r"\b(given|input|array|list|nums|sequence|takes?|receives?)\b", re.IGNORECASE)
+
+
+def _input_is_sorted(question: str) -> bool:
+    """Does the question promise a sorted INPUT ("given an array sorted in non-decreasing order",
+    "the input list is sorted")? A "sorted" that comes after "return"/"output" in its sentence
+    describes the result instead ("return the intervals sorted by start")."""
+    for sentence in re.split(r"(?<=[.!?])\s+", question):
+        for m in _SORTED_WORD.finditer(sentence):
+            before = sentence[:m.start()]
+            if not _OUTPUT_WORDS.search(before) and _INPUT_WORDS.search(before + sentence[m.end():m.end() + 20]):
+                return True
+    return False
+MAX_REORDERED = 3
+
+
+def _reordered_copies(cases: list[TestCase], question: str) -> list[TestCase]:
+    """Deterministic order tests: the same input with its first list argument reversed.
+
+    The model did not reliably write unsorted inputs, so a solution that forgets to sort
+    could pass every test (2 runs in 3 on merge-intervals). Reversal keeps the elements, so
+    the input stays valid — unless the question promises a sorted input (e.g. binary
+    search), where a reversed list would break the constraints; then nothing is added.
+    Expected outputs come from the references like every other test."""
+    if _input_is_sorted(question):
+        return []
+    seen = {json.dumps(c.args, sort_keys=True) for c in cases}
+    extra = []
+    for c in cases:
+        if len(extra) >= MAX_REORDERED:
+            break
+        idx = next((i for i, a in enumerate(c.args) if isinstance(a, list) and len(a) >= 3), None)
+        if idx is None:
+            continue
+        args = list(c.args)
+        args[idx] = list(reversed(args[idx]))
+        key = json.dumps(args, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        extra.append(TestCase(args=args, label=f"{c.label or 'test'} (input reversed)"))
+    return extra
+
+
+def _stated_in(args: list, question: str) -> bool:
+    """True if every argument of an example literally appears in the question text."""
+    q = re.sub(r"\s+", "", question)
+    for a in args:
+        forms = {json.dumps(a, separators=(",", ":"))}
+        if isinstance(a, str):
+            forms.add(a)
+        if isinstance(a, bool):
+            forms |= {"true" if a else "false", str(a)}
+        if not any(re.sub(r"\s+", "", f) in q for f in forms):
+            return False
+    return bool(args)
+
+
+def _arity(source: str, name: str) -> Optional[tuple[int, int]]:
+    """(required, total) positional parameters of `name` in Python `source` (self excluded), or None."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    fn = next((f for f in funcs if f.name == name), funcs[0] if len(funcs) == 1 else None)
+    if fn is None or fn.args.vararg:
+        return None
+    params = [a.arg for a in fn.args.posonlyargs + fn.args.args if a.arg != "self"]
+    return len(params) - len(fn.args.defaults), len(params)
+
+
 class TestPlan(BaseModel):
     testable: bool = True
     reason: str = ""
@@ -66,8 +151,33 @@ class TestPlan(BaseModel):
     brute_force_solution: str = ""
     compare: Literal["exact", "unordered", "unordered_nested", "float"] = "exact"
     common_mistakes: StrList = []   # asked for first so the tests target them
+    mistake_solutions: StrList = []  # one deliberately wrong Python solution per common mistake
     examples: list[TestCase] = Field(default=[], max_length=5)
     tests: list[TestCase] = Field(default=[], max_length=10)
+
+    @model_validator(mode="after")
+    def _well_formed(self):
+        # Validation errors make the gateway re-ask with the reason, instead of the agent
+        # falling back to "too few tests". Both checks come from failures seen in evals.
+        if not self.testable:
+            return self
+        if len(self.tests) < MIN_TESTS:
+            raise ValueError(f"tests must contain at least {MIN_TESTS} inputs when testable is true (got {len(self.tests)})")
+        # For one-parameter functions the model sometimes packed all test strings into ONE test's
+        # args (calling is_valid("()", "(]", ...)), so the reference crashed on every test.
+        arity = _arity(self.reference_solution, self.function_name)
+        if arity:
+            low, high = arity
+            bad = [c.label or str(c.args)[:40] for c in self.examples + self.tests if not low <= len(c.args) <= high]
+            if bad:
+                n = f"{low}" if low == high else f"{low}-{high}"
+                raise ValueError(f"{self.function_name} takes {n} argument(s), so every test's \"args\" must have exactly "
+                                 f"{n} element(s) — one test per call (e.g. {{\"args\": [\"()\"]}}). Wrong: {bad[:4]}")
+        return self
+
+
+class ExtraTests(BaseModel):
+    tests: list[TestCase] = Field(default=[], max_length=6)
 
 
 class EntryChoice(BaseModel):
@@ -102,17 +212,15 @@ class Review(BaseModel):
 
 # ── 1. Plan tests from the question only ─────────────────────────
 
-async def plan_tests(state: dict) -> dict:
-    language = state["language"]
-    if language not in harness.SUPPORTED:
-        return {"mode": "review_only", "skip_reason": f"{language} is not run in the sandbox yet — reviewed by AI only",
-                "logs": [f"⏭️ {language}: no sandbox runner, AI review only"]}
-
+async def _make_plan(question: str, feedback: str = "") -> tuple[TestPlan, list[TestCase]]:
+    """Ask for a test plan (optionally with feedback on a previous, broken one) and sanitise it."""
+    retry = (f"\n\nYour previous plan for this question was unusable: {feedback}\n"
+             "Write a new, carefully checked reference_solution and tests.") if feedback else ""
     prompt = f"""You are preparing hidden test cases for a coding-interview question.
 
 {UNTRUSTED_NOTE}
 
-{wrap_untrusted("question", state["question"][:3000])}
+{wrap_untrusted("question", question[:3000])}
 
 If this question asks for a function that maps inputs to an output (algorithms, data structures,
 string/array/math problems), set testable=true and provide:
@@ -124,14 +232,19 @@ string/array/math problems), set testable=true and provide:
 - examples: input/expected pairs that are written in the question itself (empty if none)
 - common_mistakes: 2-4 typical WRONG approaches candidates write for this problem (e.g. "assumes the
   input is sorted", "only counts brackets, ignores their order", "reuses the same element")
-- tests: 6-10 test inputs (args only, no expected values). At least one test must make EACH common
+- mistake_solutions: for each common mistake, a short Python 3 solution (same function name and
+  signature) that makes exactly that mistake — used to check the tests really catch it
+- tests: 6-10 test inputs. Each test is ONE call of the function: "args" holds that call's arguments in order
+  (a one-parameter function has exactly one element: {{"args": ["()[]"]}}). At least one test must make EACH common
   mistake produce a wrong answer (e.g. unsorted input, brackets balanced in count but wrongly nested).
+  If a correct solution has to sort or reorder the input, at least 2 tests must have UNSORTED input.
   Also cover edges (duplicates, negatives, boundaries). Keep each input small.
   EVERY test must satisfy the question's stated constraints and guarantees: if it says "exactly one
   solution exists", every test has exactly one; if it says the array is non-empty, never pass an
   empty one. A test outside the constraints would fail correct candidates unfairly.
-- compare: "exact"; "unordered" if any order of a returned list is acceptable; "unordered_nested"
-  if both the outer list and each inner list may be in any order; "float" for floating-point answers
+- compare: "exact" by default. "unordered" / "unordered_nested" ONLY if the question explicitly says the
+  result may be returned in any order — never when it asks for a sorted or ordered result.
+  "float" for floating-point answers
 If it is not testable this way (system design, SQL, open-ended, needs I/O or classes with state), set
 testable=false and give the reason.
 
@@ -141,18 +254,38 @@ Return ONLY JSON:
   "brute_force_solution": "def two_sum(nums, target):\\n    ...",
   "compare": "exact",
   "common_mistakes": ["uses the same element twice"],
+  "mistake_solutions": ["def two_sum(nums, target):\\n    ..."],
   "examples": [{{"args": [[2, 7, 11, 15], 9], "expected": [0, 1], "label": "example 1"}}],
-  "tests": [{{"args": [[3, 3], 6], "label": "duplicates"}}]}}"""
+  "tests": [{{"args": [[3, 3], 6], "label": "duplicates"}}]}}{retry}"""
 
     result = await ainvoke_structured(prompt, TestPlan, fallback=TestPlan(testable=False, reason="Test planning failed"),
                                       tier="reasoning", temperature=0, name="code_assessment.plan_tests", json_mode=True)
     plan = result.data
+    if plan.compare.startswith("unordered") and _ORDER_MATTERS.search(question):
+        plan.compare = "exact"
+    # An "example" is only ground truth if its input is actually written in the question. The
+    # model once filed its own test as an example with a wrong answer, which voided every test.
+    stated, invented = [], []
+    for ex in plan.examples:
+        (stated if _stated_in(ex.args, question) else invented).append(ex)
+    plan.examples = stated
+    plan.tests = [TestCase(args=ex.args, label=ex.label) for ex in invented] + plan.tests
+    plan.tests += _reordered_copies(plan.examples + plan.tests, question)
     cases = plan.examples + plan.tests
+    if len(json.dumps([c.args for c in cases])) > MAX_TESTS_JSON:
+        cases = [c for c in cases if len(json.dumps(c.args)) < MAX_TESTS_JSON // len(cases)]
+    return plan, cases
+
+
+async def plan_tests(state: dict) -> dict:
+    language = state["language"]
+    if language not in harness.SUPPORTED:
+        return {"mode": "review_only", "skip_reason": f"{language} is not run in the sandbox yet — reviewed by AI only",
+                "logs": [f"⏭️ {language}: no sandbox runner, AI review only"]}
+    plan, cases = await _make_plan(state["question"])
     if not plan.testable or not plan.reference_solution.strip() or len(cases) < 3:
         return {"mode": "review_only", "skip_reason": plan.reason or "Could not build test cases for this question",
                 "logs": [f"⏭️ Not testable: {plan.reason or 'no usable tests'}"]}
-    if len(json.dumps([c.args for c in cases])) > MAX_TESTS_JSON:
-        cases = [c for c in cases if len(json.dumps(c.args)) < MAX_TESTS_JSON // len(cases)]
 
     return {
         "mode": "executed",
@@ -203,27 +336,29 @@ async def _execute(language: str, code: str, entry: str, inputs: list[list]) -> 
 
 # ── 2. Expected outputs = running the reference ──────────────────
 
-async def run_reference(state: dict) -> dict:
-    if state.get("mode") != "executed":
-        return {}
-    plan, cases = state["plan"], state["cases"]
-    inputs = [c["args"] for c in cases]
-    runs = []
-    try:
-        for source in (plan["reference_solution"], plan.get("brute_force_solution") or ""):
-            if not source.strip():
-                continue
-            entry = harness.pick_entry(harness.candidate_entries("python", source), plan["function_name"]) or plan["function_name"]
-            runs.append((await _execute("python", source, entry, inputs))["results"])
-    except Exception as e:
-        logger.warning("Reference run failed: %s", e)
-        return {"mode": "review_only", "skip_reason": "Code sandbox unavailable — reviewed by AI only",
-                "logs": [f"⚠️ Sandbox unavailable ({type(e).__name__}) — falling back to AI review"]}
+def _py_entry(plan: dict, source: str) -> str:
+    return harness.pick_entry(harness.candidate_entries("python", source), plan["function_name"]) or plan["function_name"]
 
+
+async def _expected_outputs(plan: dict, cases: list[dict]) -> tuple[list, list, int, list]:
+    """Run both references over `cases`: (kept cases with expected outputs, mismatched examples,
+    ambiguous count, notes). Raises if the sandbox is unavailable."""
+    inputs = [c["args"] for c in cases]
+    sources = [src for src in (plan["reference_solution"], plan.get("brute_force_solution") or "") if src.strip()]
+    runs = [r["results"] for r in await asyncio.gather(*(_execute("python", src, _py_entry(plan, src), inputs)
+                                                           for src in sources))]
     notes = []
     if len(runs) > 1 and sum(r["status"] == "ran" for r in runs[1]) < len(cases) / 2:
         runs = runs[:1]                    # the brute force is itself broken (crashes on most inputs): ignore it
         notes.append("brute-force reference crashed on most inputs and was ignored")
+    elif len(runs) > 1:
+        both = [(a, b) for a, b in zip(*runs) if a["status"] == b["status"] == "ran"]
+        disagree = sum(not harness.same(a["out"], b["out"], plan["compare"]) for a, b in both)
+        if both and disagree > len(both) / 2:
+            # Disagreeing on most inputs means the brute force is wrong, not that most tests have
+            # several valid answers (seen on merge-intervals: it silently returned wrong merges).
+            runs = runs[:1]
+            notes.append("brute-force reference disagreed on most inputs and was ignored")
 
     kept, mismatched, ambiguous = [], [], 0
     for i, case in enumerate(cases):
@@ -237,17 +372,95 @@ async def run_reference(state: dict) -> dict:
         if case.get("expected") is not None and not harness.same(case["expected"], outs[0]["out"], plan["compare"]):
             mismatched.append(case.get("label") or "example")
         kept.append({**case, "expected": outs[0]["out"]})
+    return kept, mismatched, ambiguous, notes
+
+
+async def _surviving_mistakes(plan: dict, kept: list[dict]) -> list[int]:
+    """Indexes of the planned wrong solutions that pass every kept test — i.e. mistakes the tests miss."""
+    mistakes = [m for m in plan.get("mistake_solutions", [])[:3] if m.strip()]
+    if not mistakes:
+        return []
+    inputs = [c["args"] for c in kept]
+    runs = await asyncio.gather(*(_execute("python", m, _py_entry(plan, m), inputs) for m in mistakes))
+    survivors = []
+    for i, run in enumerate(runs):
+        results = run["results"]
+        if all(r["status"] == "ran" for r in results) and all(
+                harness.same(c["expected"], r["out"], plan["compare"]) for c, r in zip(kept, results)):
+            survivors.append(i)
+    return survivors
+
+
+async def _tests_that_break(question: str, plan: dict, survivors: list[int], kept: list[dict]) -> list[dict]:
+    wrong = "\n\n".join(plan["mistake_solutions"][i] for i in survivors)
+    named = [plan["common_mistakes"][i] for i in survivors if i < len(plan["common_mistakes"])]
+    prompt = f"""These WRONG solutions to a coding question pass every current test, so the tests are too weak.
+{UNTRUSTED_NOTE}
+{wrap_untrusted("question", question[:2500])}
+Wrong solutions (each makes a typical mistake: {json.dumps(named)}):
+{wrap_untrusted("wrong_solutions", wrong[:4000])}
+Current test inputs: {json.dumps([c["args"] for c in kept])[:2000]}
+
+Write 2-4 NEW test inputs on which these wrong solutions give a different answer than a correct solution.
+Every input must satisfy the question's constraints (e.g. exactly one valid answer if the question says so).
+Return ONLY JSON: {{"tests": [{{"args": [], "label": "breaks <mistake>"}}]}}"""
+    result = await ainvoke_structured(prompt, ExtraTests, fallback=ExtraTests(), tier="reasoning", temperature=0,
+                                      name="code_assessment.strengthen_tests", json_mode=True)
+    return [t.model_dump() for t in result.data.tests]
+
+
+async def run_reference(state: dict) -> dict:
+    if state.get("mode") != "executed":
+        return {}
+    plan, cases = state["plan"], state["cases"]
+    replanned = None
+    try:
+        kept, mismatched, ambiguous, notes = await _expected_outputs(plan, cases)
+        if mismatched or len(kept) < 3:
+            # The model's reference is sometimes simply wrong (seen on merge-intervals). One retry,
+            # told what went wrong, before falling back to an AI-only review.
+            why = (f"its reference_solution gave the wrong answer for the question's own example(s) {mismatched}"
+                   if mismatched else "its reference_solution crashed on most test inputs")
+            new_plan, new_cases = await _make_plan(state["question"], feedback=why)
+            if new_plan.testable and new_plan.reference_solution.strip() and len(new_cases) >= 3:
+                plan = new_plan.model_dump()
+                cases = [c.model_dump() for c in new_cases]
+                kept, mismatched, ambiguous, notes = await _expected_outputs(plan, cases)
+                replanned = why
+        mutation = None
+        if not mismatched and len(kept) >= 3 and plan.get("mistake_solutions"):
+            # Test the tests: every planned mistake must fail at least one of them.
+            total = len([m for m in plan["mistake_solutions"][:3] if m.strip()])
+            survivors = await _surviving_mistakes(plan, kept)
+            added = 0
+            if survivors:
+                extra = await _tests_that_break(state["question"], plan, survivors, kept)
+                if extra:
+                    extra_kept, extra_mismatched, _, _ = await _expected_outputs(plan, extra)
+                    if not extra_mismatched:
+                        kept += extra_kept
+                        added = len(extra_kept)
+                        survivors = await _surviving_mistakes(plan, kept)
+            mutation = {"mistakes": total, "caught": total - len(survivors), "tests_added": added}
+    except Exception as e:
+        logger.warning("Reference run failed: %s", e)
+        return {"mode": "review_only", "skip_reason": "Code sandbox unavailable — reviewed by AI only",
+                "logs": [f"⚠️ Sandbox unavailable ({type(e).__name__}) — falling back to AI review"]}
 
     if mismatched:
         return {"mode": "review_only", "skip_reason": "Generated tests disagreed with the question's own examples — not trusted",
                 "logs": [f"⚠️ Reference solution failed the question's examples ({', '.join(mismatched)}) — AI review only"]}
     if len(kept) < 3:
         return {"mode": "review_only", "skip_reason": "Too few reliable test cases",
-                "logs": ["⚠️ Reference solution failed on most tests — AI review only"]}
-    checked = "two independent references agree" if len(runs) > 1 else "one reference"
-    return {"cases": kept, "logs": [f"✅ Expected outputs for {len(kept)}/{len(cases)} tests ({checked}"
-                                    + (f"; dropped {ambiguous} ambiguous" if ambiguous else "")
-                                    + "".join(f"; {n}" for n in notes) + ")"]}
+                "logs": ["⚠️ Too few tests survived the reference cross-check — AI review only"]}
+    logs = [f"✅ Expected outputs for {len(kept)} tests (references cross-checked"
+            + (f"; dropped {ambiguous} ambiguous" if ambiguous else "") + "".join(f"; {n}" for n in notes) + ")"]
+    if mutation:
+        logs.append(f"🧬 Mutation check: tests catch {mutation['caught']}/{mutation['mistakes']} common mistakes"
+                    + (f" (added {mutation['tests_added']} tests)" if mutation["tests_added"] else ""))
+    if replanned:
+        logs.insert(0, f"🔁 Re-planned the tests once ({replanned})")
+    return {"cases": kept, "plan": plan, "mutation": mutation, "logs": logs}
 
 
 # ── 3. Candidate's code on the same inputs ───────────────────────
@@ -413,6 +626,7 @@ def build_report(state: dict) -> dict:
             "total": len(tests),
             "entry": state.get("entry"),
             "compare": (state.get("plan") or {}).get("compare"),
+            "mutation": state.get("mutation"),   # how many planned wrong solutions the tests catch
         },
         "tests": tests,
         "guardrails": {"injectionSignals": state.get("injection_signals", []),
