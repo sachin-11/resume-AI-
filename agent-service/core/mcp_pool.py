@@ -21,13 +21,19 @@ differs from the pin in mcp_pins.json — a server changed what it tells the mod
 the tool is refused and an alert fires until someone reviews it and re-pins:
     python -m core.mcp_pool pin      # print current hashes to review / commit
 Unpinned tools are accepted with a warning (trust on first use).
+
+Tracing (SEP-414): every call carries W3C trace context in `_meta.traceparent`. The
+trace id comes from this request's id, so `mcp_call trace_id=…` here and the MCP
+server's audit line for the same call share one id.
 """
 import asyncio
 import hashlib
 import json
 import logging
 import os
+import secrets
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -94,6 +100,22 @@ def tool_fingerprint(tool: Any) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+def _traceparent() -> str:
+    """W3C traceparent for one MCP call: trace id from the current request id, fresh span id."""
+    try:
+        from core.observability import request_id_var
+        rid = request_id_var.get()
+    except Exception:
+        rid = "-"
+    if rid == "-":
+        trace_id = secrets.token_hex(16)
+    elif len(rid) == 32 and all(c in "0123456789abcdef" for c in rid):
+        trace_id = rid
+    else:
+        trace_id = hashlib.sha256(rid.encode()).hexdigest()[:32]
+    return f"00-{trace_id}-{secrets.token_hex(8)}-01"
+
+
 def _load_pins() -> dict:
     try:
         return json.loads(PINS_FILE.read_text(encoding="utf-8"))
@@ -139,13 +161,13 @@ class _Session:
                 logger.info("mcp_session_started server=%s transport=%s protocol=%s", self.cfg.name, self.cfg.transport,
                             client.protocol_version)
                 while True:
-                    tool, arguments, fut = await self.queue.get()
+                    tool, arguments, meta, fut = await self.queue.get()
                     if tool is None:
                         return
                     if fut.cancelled():
                         continue
                     try:
-                        result = await client.call_tool(tool, arguments)
+                        result = await client.call_tool(tool, arguments, meta=meta)
                         if not fut.cancelled():
                             fut.set_result(result)
                     except Exception as e:   # one failed call doesn't end the session
@@ -155,7 +177,7 @@ class _Session:
             if self.ready and not self.ready.done():
                 self.ready.set_exception(e if isinstance(e, Exception) else RuntimeError(str(e)))
             while not self.queue.empty():
-                _, _, fut = self.queue.get_nowait()
+                *_, fut = self.queue.get_nowait()
                 if fut and not fut.done():
                     fut.set_exception(RuntimeError(f"MCP session '{self.cfg.name}' ended"))
             if not isinstance(e, (asyncio.CancelledError, GeneratorExit)):
@@ -191,13 +213,22 @@ class _Session:
     async def call(self, tool: str, arguments: dict) -> Any:
         if tool in self.blocked:
             raise ToolDefinitionChanged(f"MCP tool '{self.cfg.name}.{tool}' refused: {self.blocked[tool]}")
+        traceparent = _traceparent()
         fut = asyncio.get_running_loop().create_future()
-        await self.queue.put((tool, arguments, fut))
-        return await asyncio.wait_for(fut, CALL_TIMEOUT_S)
+        started = time.monotonic()
+        await self.queue.put((tool, arguments, {"traceparent": traceparent}, fut))
+        ok = False
+        try:
+            result = await asyncio.wait_for(fut, CALL_TIMEOUT_S)
+            ok = not getattr(result, "is_error", False)
+            return result
+        finally:
+            logger.info("mcp_call server=%s tool=%s trace_id=%s ok=%s ms=%d", self.cfg.name, tool,
+                        traceparent.split("-")[1], ok, (time.monotonic() - started) * 1000)
 
     async def close(self) -> None:
         if self.alive:
-            await self.queue.put((None, None, None))
+            await self.queue.put((None, None, None, None))
             try:
                 await asyncio.wait_for(self.task, 5)
             except (asyncio.TimeoutError, Exception):

@@ -101,3 +101,19 @@ def test_unconfigured_server_is_an_error(fake):
         with pytest.raises(RuntimeError, match="not configured"):
             await pool.call("nope", "anything", {})
     run(go)
+
+
+def test_traceparent_follows_the_request_id():
+    from core.observability import request_id_var
+    token = request_id_var.set("4bf92f3577b34da6a3ce929d0e0e4736")
+    try:
+        a, b = mcp_pool._traceparent(), mcp_pool._traceparent()
+    finally:
+        request_id_var.reset(token)
+    assert a.startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-") and a.endswith("-01")
+    assert a.split("-")[2] != b.split("-")[2]                 # new span per call, same trace
+    token = request_id_var.set("req-abc")
+    try:
+        assert mcp_pool._traceparent().split("-")[1] == mcp_pool._traceparent().split("-")[1]
+    finally:
+        request_id_var.reset(token)

@@ -52,14 +52,15 @@ async function guarded<R extends CallToolResult | InputRequiredResult>(
   name: string, ctx: ServerContext, args: unknown, run: () => Promise<R>,
 ): Promise<R | CallToolResult> {
   const p = principalOf(ctx.http?.authInfo);
+  const traceparent = ctx.mcpReq._meta?.traceparent;
   const started = Date.now();
   try {
     const result = await run();
     const failed = "isError" in result && result.isError === true;
-    audit({ tool: name, userId: p.userId, clientId: p.clientId, args, ok: !failed, ms: Date.now() - started });
+    audit({ tool: name, userId: p.userId, clientId: p.clientId, args, ok: !failed, ms: Date.now() - started, traceparent });
     return result;
   } catch (err) {
-    audit({ tool: name, userId: p.userId, clientId: p.clientId, args, ok: false, ms: Date.now() - started,
+    audit({ tool: name, userId: p.userId, clientId: p.clientId, args, ok: false, ms: Date.now() - started, traceparent,
             error: err instanceof Error ? err.name : "Error" });
     if (err instanceof data.NotFoundError || err instanceof AgentServiceError) return toolError(err.message);
     throw err;
