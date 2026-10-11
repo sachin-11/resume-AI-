@@ -13,7 +13,8 @@
  * The MCP server never forwards these tokens anywhere. When a tool needs the
  * agent-service it signs a fresh service JWT for the same user (lib/agentAuth).
  */
-import { SignJWT, jwtVerify } from "jose";
+import { SignJWT, jwtVerify, errors as joseErrors } from "jose";
+import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 import type { AuthInfo, OAuthTokenVerifier } from "@modelcontextprotocol/server";
 
 /** Scope → what it allows. Least privilege: reading never implies writing. */
@@ -67,12 +68,20 @@ export async function mintAccessToken(p: McpPrincipal, ttlSeconds = ACCESS_TOKEN
 /** Token verifier the SDK's bearer gate calls; fills AuthInfo.resource from `aud` for the audience check. */
 export const tokenVerifier: OAuthTokenVerifier = {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const { payload, protectedHeader } = await jwtVerify(token, signingKey(), {
-      algorithms: ["HS256"],
-      issuer: appBaseUrl(),
-      typ: "at+jwt",
-    });
-    if (protectedHeader.typ !== "at+jwt" || typeof payload.sub !== "string") throw new Error("Not an access token");
+    const key = signingKey();   // a missing secret is our misconfiguration → stays a 500
+    let verified;
+    try {
+      verified = await jwtVerify(token, key, { algorithms: ["HS256"], issuer: appBaseUrl(), typ: "at+jwt" });
+    } catch (err) {
+      // Malformed, forged, expired, wrong issuer… → 401 invalid_token, never a 500 (the SDK's bearer
+      // gate answers 401 only for OAuthError). The client then refreshes or re-authorizes.
+      if (err instanceof joseErrors.JOSEError) throw new OAuthError(OAuthErrorCode.InvalidToken, "Invalid or expired access token");
+      throw err;
+    }
+    const { payload, protectedHeader } = verified;
+    if (protectedHeader.typ !== "at+jwt" || typeof payload.sub !== "string") {
+      throw new OAuthError(OAuthErrorCode.InvalidToken, "Not an access token");
+    }
     const aud = Array.isArray(payload.aud) ? payload.aud[0] : payload.aud;
     return {
       token,
