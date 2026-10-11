@@ -115,7 +115,8 @@ export async function proxy(req: NextRequest) {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
     if (!token) {
       const loginUrl = new URL("/login", req.url);
-      loginUrl.searchParams.set("callbackUrl", pathname);
+      // Keep the query: /oauth/consent?request=… is useless without it.
+      loginUrl.searchParams.set("callbackUrl", pathname + req.nextUrl.search);
       return NextResponse.redirect(loginUrl);
     }
 
