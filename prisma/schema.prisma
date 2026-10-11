@@ -430,3 +430,24 @@ model InterviewSlot {
   campaign    InterviewCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   invites     CandidateInvite[]
 }
+
+// A destructive MCP action waiting for the recruiter's out-of-band approval
+// (approval link / URL-mode elicitation) — for MCP clients that cannot show a
+// confirmation form. The recruiter approves in the web app; the AI cannot.
+model McpApproval {
+  id          String    @id @default(cuid())
+  userId      String
+  clientId    String
+  action      String    // "book_interview"
+  candidateId String
+  slotId      String
+  message     String
+  status      String    @default("pending") // pending | approved | declined | expired
+  outcome     Json?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  decidedAt   DateTime?
+
+  @@index([userId, status])
+  @@index([candidateId, slotId])
+}

@@ -65,6 +65,7 @@ const PROTECTED_PREFIXES = [
   "/team", "/admin", "/chat", "/question-bank",
   "/interview/setup", "/interview/session", "/interview/copilot",
   "/recruiter-copilot",
+  "/mcp", "/oauth",   // MCP approval links and the OAuth consent screen (not /api/mcp — that uses bearer tokens)
 ];
 
 // ── API rate limits ──────────────────────────────────────────────
