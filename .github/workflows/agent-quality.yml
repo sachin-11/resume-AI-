@@ -91,6 +91,10 @@ jobs:
           curl -s -o /dev/null http://localhost:3100/.well-known/oauth-authorization-server || true
       - name: MCP contract tests
         run: node scripts/mcp-smoke.mjs --user "$(jq -r .user seed.json)" --other-user "$(jq -r .otherUser seed.json)"
+      - name: Tool definitions match the eval snapshot
+        # Tool descriptions are prompts for external LLMs; a changed tool must refresh
+        # agent-service/evals/mcp_tools.json, which also triggers the eval gate (mcp_tools suite).
+        run: node scripts/mcp-tools-snapshot.mjs --user "$(jq -r .user seed.json)" --check
       - name: MCP OAuth end-to-end tests
         run: node scripts/mcp-oauth-e2e.mjs --user "$(jq -r .user seed.json)"
       - name: Server log (on failure)

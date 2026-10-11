@@ -1,0 +1,228 @@
+[
+  {
+    "name": "book_interview",
+    "title": "Book an interview (asks you to confirm)",
+    "description": "Books a candidate into an open slot of their campaign and emails them. Always needs the recruiter's confirmation (a form, or an approval link they open in Resume AI). Idempotent for the same candidate + slot.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "candidateId": {
+          "type": "string"
+        },
+        "slotId": {
+          "type": "string"
+        },
+        "message": {
+          "default": "We'd like to invite you to the next interview round.",
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "candidateId",
+        "slotId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "get_candidate",
+    "title": "Candidate details",
+    "description": "One candidate's interview result: scores, strengths, weak areas, summary and proctoring flags.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "candidateId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidateId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "get_job_result",
+    "title": "Get an AI job's result",
+    "description": "Status and, when finished, the result of a screen_resume or rank_candidates job. Waits up to ~20s with progress.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "jobHandle": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
+        }
+      },
+      "required": [
+        "jobHandle"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "list_campaigns",
+    "title": "List interview campaigns",
+    "description": "Your interview campaigns (one per role) with candidate counts, completed interviews, shortlisted and open slots. Paginated.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "status": {
+          "default": "active",
+          "type": "string",
+          "enum": [
+            "active",
+            "closed",
+            "all"
+          ]
+        },
+        "cursor": {
+          "description": "nextCursor from the previous page",
+          "type": "string"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "list_open_slots",
+    "title": "Open interview slots",
+    "description": "Future, unbooked interview slots of a campaign (up to 50).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaignId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "rank_candidates",
+    "title": "Rank a campaign's candidates (AI hiring committee)",
+    "description": "Starts the hiring-committee agent over every interviewed candidate of a campaign: one assessment per candidate in parallel, then rule-based ranking. Takes up to a few minutes — returns a jobHandle immediately.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string"
+        },
+        "shortlistSize": {
+          "default": 5,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        }
+      },
+      "required": [
+        "campaignId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "screen_resume",
+    "title": "Screen a resume against a campaign",
+    "description": "Runs the AI screening agent (requirement-by-requirement match, GitHub check, injection and bias guardrails) on a resume against a campaign's role. Usually ~10s; if it takes longer you get a jobHandle for get_job_result.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string"
+        },
+        "resumeText": {
+          "type": "string",
+          "minLength": 50,
+          "maxLength": 20000
+        }
+      },
+      "required": [
+        "campaignId",
+        "resumeText"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "search_candidates",
+    "title": "Search candidates in a campaign",
+    "description": "Candidates of one campaign, best interview score first. Filter by status, minimum score or shortlisted. Paginated.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "started",
+            "completed"
+          ]
+        },
+        "minScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "shortlistedOnly": {
+          "default": false,
+          "type": "boolean"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaignId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  }
+]
