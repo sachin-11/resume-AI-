@@ -41,12 +41,17 @@ const sessionCookie = `next-auth.session-token=${await encode({ token: { sub: ar
 const REDIRECT = "http://127.0.0.1:53682/callback";
 
 /** The recruiter's browser: follow /authorize to the consent screen and press Allow / Deny. */
+// Behind a proxy (Amplify) the server's own origin (http://localhost:3000) isn't the public URL; a redirect
+// built from req.nextUrl.origin sends the browser nowhere. CI runs with a public URL (127.0.0.1) that
+// differs from the server's own (localhost) so this is caught.
+const consentOrigins = new Set();
 async function browser(authUrl, decision = "allow") {
   const r1 = await fetch(authUrl, { redirect: "manual" });
   const loc = r1.headers.get("location");
   if (!loc) return { status: r1.status, body: await r1.text() };
   const consent = new URL(loc, base);
   if (consent.pathname !== "/oauth/consent") return { redirect: new URL(loc) };
+  consentOrigins.add(consent.origin);
   const r2 = await fetch(`${base}/api/oauth/consent`, {
     method: "POST", headers: { "Content-Type": "application/json", Cookie: sessionCookie },
     body: JSON.stringify({ request: consent.searchParams.get("request"), decision }),
@@ -254,6 +259,8 @@ check("connected app is listed for the user", !!mine, `${listed.connections?.len
 await fetch(`${base}/api/oauth/connections?id=${mine?.id}`, { method: "DELETE", headers: { Cookie: sessionCookie } });
 const afterDisconnect = await token({ grant_type: "refresh_token", refresh_token: conn.refresh_token });
 check("after Disconnect the app can't refresh", afterDisconnect.error === "invalid_grant", afterDisconnect.error_description);
+check("consent redirect uses the public URL, not the internal request origin",
+  consentOrigins.size > 0 && [...consentOrigins].every((o) => o === base), [...consentOrigins].join(", "));
 
 console.log(`\n${failures ? `${failures} failure(s)` : "All OAuth checks passed"}`);
 process.exit(failures ? 1 : 0);

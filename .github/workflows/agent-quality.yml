@@ -58,8 +58,10 @@ jobs:
           --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgresql://ci:ci@localhost:5432/resume_ai_ci
-      NEXTAUTH_URL: http://localhost:3100
-      MCP_PUBLIC_URL: http://localhost:3100
+      # Public URL ≠ the server's own origin (localhost), like behind Amplify's proxy: catches any
+      # redirect or URL built from the request instead of the configured public URL.
+      NEXTAUTH_URL: http://127.0.0.1:3100
+      MCP_PUBLIC_URL: http://127.0.0.1:3100
       # Throwaway values: this server only lives for the length of the job.
       NEXTAUTH_SECRET: ci-nextauth-secret-not-used-anywhere-else
       MCP_TOKEN_SECRET: ci-mcp-token-secret-not-used-anywhere-else
@@ -90,13 +92,13 @@ jobs:
           curl -s -o /dev/null -X POST http://localhost:3100/api/mcp || true
           curl -s -o /dev/null http://localhost:3100/.well-known/oauth-authorization-server || true
       - name: MCP contract tests
-        run: node scripts/mcp-smoke.mjs --user "$(jq -r .user seed.json)" --other-user "$(jq -r .otherUser seed.json)"
+        run: node scripts/mcp-smoke.mjs --url http://127.0.0.1:3100/api/mcp --user "$(jq -r .user seed.json)" --other-user "$(jq -r .otherUser seed.json)"
       - name: Tool definitions match the eval snapshot
         # Tool descriptions are prompts for external LLMs; a changed tool must refresh
         # agent-service/evals/mcp_tools.json, which also triggers the eval gate (mcp_tools suite).
-        run: node scripts/mcp-tools-snapshot.mjs --user "$(jq -r .user seed.json)" --check
+        run: node scripts/mcp-tools-snapshot.mjs --url http://127.0.0.1:3100/api/mcp --user "$(jq -r .user seed.json)" --check
       - name: MCP OAuth end-to-end tests
-        run: node scripts/mcp-oauth-e2e.mjs --user "$(jq -r .user seed.json)"
+        run: node scripts/mcp-oauth-e2e.mjs --url http://127.0.0.1:3100/api/mcp --user "$(jq -r .user seed.json)"
       - name: Server log (on failure)
         if: failure()
         run: tail -150 next.log
