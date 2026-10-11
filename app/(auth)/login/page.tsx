@@ -9,10 +9,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+/** Same-site path to return to after login (e.g. an OAuth consent screen); anything else is ignored. */
+function safeCallback(v: string | null): string | null {
+  return v && v.startsWith("/") && !v.startsWith("//") && !v.startsWith("/\\") ? v : null;
+}
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const registered = params.get("registered");
+  const next = safeCallback(params.get("callbackUrl"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -42,13 +48,13 @@ function LoginForm() {
       const sessionRes = await fetch("/api/auth/session");
       const sessionData = await sessionRes.json();
       const role = sessionData?.user?.role ?? "candidate";
-      router.push(role === "candidate" ? "/candidate-home" : "/dashboard");
+      router.push(role === "candidate" ? "/candidate-home" : next ?? "/dashboard");
     }
   }
 
   async function handleGoogle() {
     setGoogleLoading(true);
-    await signIn("google", { callbackUrl: "/api/auth/role-redirect" });
+    await signIn("google", { callbackUrl: `/api/auth/role-redirect${next ? `?next=${encodeURIComponent(next)}` : ""}` });
   }
 
   return (
