@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { OAuthClientError, assertRedirectUri, resolveClient } from "@/lib/oauth/clients";
 import { OAuthError, authorizationResponseUrl, canonicalResource, parseScopes, signPending } from "@/lib/oauth/server";
 import { checkRateLimit, getIP } from "@/lib/rate-limit";
+import { appBaseUrl } from "@/lib/mcp/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +57,9 @@ export async function GET(req: NextRequest) {
       clientId: client.id, clientName: client.name, clientKind: client.kind, redirectUri, state,
       scopes, offline, codeChallenge: challenge, resource,
     });
-    const consent = new URL("/oauth/consent", req.nextUrl.origin);
+    // The public base URL, not req.nextUrl.origin: behind Amplify's proxy the request URL is the
+    // internal http://localhost:3000, which would send the recruiter's browser nowhere.
+    const consent = new URL("/oauth/consent", appBaseUrl());
     consent.searchParams.set("request", pending);
     return NextResponse.redirect(consent);
   } catch (err) {
