@@ -4,7 +4,7 @@
   "title": "Resume-AI",
   "description": "Recruiter tools: search candidates, read interview results, screen resumes, rank, book interviews.",
   "version": "1.0.0",
-  "websiteUrl": "https://master.dbob18g9io7wi.amplifyapp.com",
+  "websiteUrl": "https://resume-ai-coach.rasuonline.in",
   "repository": {
     "url": "https://github.com/sachin-11/resume-AI-",
     "source": "github"
@@ -12,7 +12,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://master.dbob18g9io7wi.amplifyapp.com/api/mcp"
+      "url": "https://resume-ai-coach.rasuonline.in/api/mcp"
     }
   ]
 }

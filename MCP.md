@@ -41,9 +41,9 @@ All tools carry annotations (`readOnlyHint`, `destructiveHint`, …) and an `out
 
 ## Connecting a client
 
-The production endpoint is `https://master.dbob18g9io7wi.amplifyapp.com/api/mcp`. A client finds everything else from the 401 challenge (RFC 9728 → RFC 8414).
+The production endpoint is `https://resume-ai-coach.rasuonline.in/api/mcp`. A client finds everything else from the 401 challenge (RFC 9728 → RFC 8414).
 
-- **Claude Code:** `claude mcp add --transport http resume-ai https://master.dbob18g9io7wi.amplifyapp.com/api/mcp`, then run `/mcp` to sign in.
+- **Claude Code:** `claude mcp add --transport http resume-ai https://resume-ai-coach.rasuonline.in/api/mcp`, then run `/mcp` to sign in.
 - **Claude Desktop:** Settings → Connectors → *Add custom connector* → paste the URL → Connect.
 - **MCP Inspector:** `npx @modelcontextprotocol/inspector` → transport *Streamable HTTP* → URL → *Open Auth Settings* → *Quick OAuth Flow*.
 
@@ -112,7 +112,7 @@ To run the tests locally:
 |---|---|---|
 | `MCP_TOKEN_SECRET` | web | signs MCP access tokens (≥ 32 random bytes) |
 | `MCP_STATE_SECRET` | web | HMAC for MRTR `requestState` |
-| `MCP_PUBLIC_URL` | web | public base URL (issuer / audience); falls back to `NEXTAUTH_URL` |
+| `MCP_PUBLIC_URL` | web | public base URL (issuer / audience); falls back to `NEXTAUTH_URL`. **Must be the same domain as `NEXTAUTH_URL`**: the consent screen needs the login cookie, which lives on that domain |
 | `MCP_SEND_EMAILS` | web | `false` = dry run, no interview emails |
 | `MCP_OAUTH_ALLOW_LOCAL_CIMD` | web, dev only | lets a localhost URL be a CIMD client id (ignored in production) |
 | `GITHUB_PERSONAL_ACCESS_TOKEN`, `BRAVE_API_KEY`, `GOOGLE_CALENDAR_MCP_*` | agent-service | enable those MCP servers |
