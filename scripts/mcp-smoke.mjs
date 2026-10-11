@@ -55,6 +55,16 @@ const anon = await fetch(url, { method: "POST", headers: { "Content-Type": "appl
 const challenge = anon.headers.get("www-authenticate") ?? "";
 check("no token → 401 + WWW-Authenticate resource_metadata", anon.status === 401 && challenge.includes("resource_metadata"), challenge.slice(0, 120));
 
+// Bad tokens are the client's problem (401 → refresh / re-authorize), never a 500.
+const { SignJWT } = await import("jose");
+const forged = await new SignJWT({ scope: "candidates:read" }).setProtectedHeader({ alg: "HS256", typ: "at+jwt" })
+  .setSubject(args.user).setExpirationTime("1h").sign(new TextEncoder().encode("not-the-server-secret-".repeat(3)));
+for (const [label, bad] of [["malformed", "x.y.z"], ["not a JWT", "abc"], ["forged (wrong key)", forged]]) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream",
+    Authorization: `Bearer ${bad}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+  check(`${label} token → 401 invalid_token`, r.status === 401 && (r.headers.get("www-authenticate") ?? "").includes("invalid_token"), `HTTP ${r.status}`);
+}
+
 // 2. Modern client, read-only scopes.
 const full = token(args.user, "candidates:read screening:run interviews:write");
 const reader = token(args.user, "candidates:read");
