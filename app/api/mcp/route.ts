@@ -44,6 +44,9 @@ async function serve(request: Request): Promise<Response> {
   const gate = requireBearerAuth({
     verifier: tokenVerifier,
     expectedResource: mcpResourceUrl(),
+    // Every token needs the basic read scope; it is also named in the 401 challenge
+    // (WWW-Authenticate: scope="candidates:read"), the client's first hint at what to ask for.
+    requiredScopes: ["candidates:read"],
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpResourceUrl()),
   });
   const auth = await gate(request);

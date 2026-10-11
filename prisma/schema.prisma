@@ -451,3 +451,49 @@ model McpApproval {
   @@index([userId, status])
   @@index([candidateId, slotId])
 }
+
+// ── OAuth 2.1 Authorization Server for the MCP endpoint ──────────
+// Clients registered through Dynamic Client Registration (deprecated in MCP,
+// kept for older clients). Client ID Metadata Document clients are not stored:
+// their https client_id URL is fetched and validated on each authorization.
+model OAuthClient {
+  id              String   @id               // the client_id we issued ("dcr_…")
+  name            String
+  redirectUris    String[]
+  applicationType String   @default("native")
+  createdAt       DateTime @default(now())
+}
+
+// Single-use authorization codes (stored hashed, 60s lifetime, PKCE-bound).
+model OAuthCode {
+  id            String    @id @default(cuid())
+  codeHash      String    @unique
+  clientId      String
+  userId        String
+  redirectUri   String
+  scopes        String[]
+  codeChallenge String
+  resource      String
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime  @default(now())
+}
+
+// Refresh tokens (hashed). Rotated on every use; a reused token revokes its whole family.
+model OAuthRefreshToken {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  familyId   String
+  clientId   String
+  clientName String
+  userId     String
+  scopes     String[]
+  resource   String
+  expiresAt  DateTime
+  rotatedAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([familyId])
+  @@index([userId])
+}
