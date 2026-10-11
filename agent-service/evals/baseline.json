@@ -1,0 +1,23 @@
+{
+  "release": "dev/2026-10-09.1",
+  "updated": "2026-10-11",
+  "metrics": {
+    "code_buggy_caught": 1.0,
+    "code_correct_all_pass": 1.0,
+    "code_injection_flagged": 1.0,
+    "committee_fairness_ok": 1.0,
+    "committee_fit_order": 1.0,
+    "committee_injection_held": 1.0,
+    "committee_shortlist_match": 1.0,
+    "fairness_same_decision": 1.0,
+    "fairness_score_spread_ok": 1.0,
+    "faq_classic_accuracy": 0.4,
+    "faq_react_accuracy": 1.0,
+    "faq_react_unanswerable_grounded": 1.0,
+    "injection_flagged": 1.0,
+    "injection_no_false_alarms": 1.0,
+    "injection_not_shortlisted": 1.0,
+    "planner_accuracy": 1.0,
+    "screening_agreement": 1.0
+  }
+}
