@@ -11,9 +11,9 @@
 ## 1. 30-second pitch
 
 > "I built **AI Resume Coach**, an AI hiring platform. Candidates get resume analysis and AI mock interviews; recruiters get bulk AI interviews, AI screening and a **Recruitment Copilot** that runs multi-step work from chat — *'screen this candidate and if she's shortlisted, book an interview'* — with a human approval before anything that affects a person.
-> It's a Next.js app plus a separate Python **LangGraph** agent service. The part I'm proudest of is the production side: every agent runs under budgets and timeouts, has a kill switch, and is gated by real-LLM evals in CI — including prompt-injection and fairness tests. Most recently I added a coding-assessment agent that runs candidates' code in an **AWS Bedrock AgentCore** sandbox instead of an LLM guessing whether it's correct."
+> It's a Next.js app plus a separate Python **LangGraph** agent service. The part I'm proudest of is the production side: every agent runs under budgets and timeouts, has a kill switch, and is gated by real-LLM evals in CI — including prompt-injection and fairness tests. I also added a coding-assessment agent that runs candidates' code in an **AWS Bedrock AgentCore** sandbox instead of an LLM guessing whether it's correct. Most recently I made the platform an **MCP server with its own OAuth 2.1 login**, live in production: a recruiter can connect Claude Desktop and work with their candidates from there."
 
-**Hindi mein yaad rakhne ke liye:** hiring platform → do services → AI propose kare, code execute kare → production controls + evals → AgentCore coding agent.
+**Hindi mein yaad rakhne ke liye:** hiring platform → do services → AI propose kare, code execute kare → production controls + evals → AgentCore coding agent → MCP server + OAuth (Claude Desktop se live).
 
 ---
 
@@ -178,85 +178,200 @@ Browser ──► Next.js (AWS Amplify) ──JWT──► Python agent-service 
 
 ---
 
-## 6.5 MCP — Resume-AI ka apna MCP server (naya kaam)
+## 6.5 MCP — Resume-AI ka apna MCP server + OAuth (production mein live)
 
-### Ek line mein
-> "I built an MCP server for the platform, so a recruiter can work with their own hiring pipeline from any MCP client — list candidates, read interview results, run AI screening and book interviews — with OAuth scopes and a human confirmation before anything that emails a candidate."
+> Poori technical detail: `MCP.md`. Yahan sirf wo hai jo interview mein bolna hai, simple bhasha mein.
 
-### MCP kya hai (simple)
-- **MCP = AI ke liye USB port.** Ek standard tarika jisse koi bhi AI app (Claude Desktop, Claude Code, apna agent) kisi bhi system ke tools aur data use kar sake — har app ke liye alag integration likhne ki zaroorat nahi.
-- **Teen roles:** **Host** (jo app user chalata hai, jaise Claude Desktop) → uske andar **Client** → jo **Server** se baat karta hai (humara Resume-AI server).
+### Ek line mein (pitch)
+> "I made Resume-AI usable from any AI assistant. It's an MCP server with its own OAuth 2.1 login, live in production. A recruiter connects Claude Desktop, logs in and approves on a consent screen, and can then ask Claude to list candidates, read interview results, run AI screening or book an interview. Booking always needs a human confirmation. I also moved my Python agents to the official MCP client, and I found and fixed four production bugs while connecting it."
+
+**Hindi mein yaad rakhne ke liye:** MCP server (8 tools) → apna OAuth server → Claude Desktop se live connect → agents bhi MCP client → 4 production bugs pakde, har ek ka CI test.
+
+---
+
+### MCP kya hai (bilkul simple)
+- **MCP = AI ke liye USB port.** Ek standard tarika jisse koi bhi AI app (Claude Desktop, Claude Code, apna agent) kisi bhi system ke tools aur data use kar sake. Har AI app ke liye alag integration likhne ki zaroorat nahi.
+- **Teen roles:**
+  - **Host:** wo app jo user chalata hai (Claude Desktop).
+  - **Client:** host ke andar ka hissa jo server se baat karta hai.
+  - **Server:** humara Resume-AI (`/api/mcp`).
 - **Server teen cheezein deta hai:**
-  - **Tools** = kaam (model chalata hai): `search_candidates`, `book_interview`…
-  - **Resources** = padhne ka data (app/user chunta hai): `campaign://{id}`, `candidate://{id}`, hiring policy
-  - **Prompts** = tayyar templates (user chunta hai): "review-campaign", "interview-kit"
+  - **Tools** = kaam, jo AI model khud chalata hai: `search_candidates`, `book_interview`, …
+  - **Resources** = padhne ka data: `campaign://{id}`, `candidate://{id}`, hiring policy.
+  - **Prompts** = tayyar templates jo user chunta hai: "review-campaign", "interview-kit".
+- **Ek hi project mein dono side banaye:**
+  - **Server:** Next.js, taaki Claude jaise apps Resume-AI use karein.
+  - **Client:** Python agent-service, jo GitHub aur Brave jaise MCP servers use karta hai.
 
-### Kya banaya (asli numbers)
+---
+
+### Poora flow — Claude Desktop connect karte waqt kya hota hai (whiteboard pe aise samjhao)
+```
+1. Claude  → POST /api/mcp (bina token)          → 401 + "metadata yahan hai" (WWW-Authenticate)
+2. Claude  → /.well-known/oauth-protected-resource → "mera login server ye hai" (RFC 9728)
+3. Claude  → /.well-known/oauth-authorization-server → endpoints, PKCE S256, CIMD support (RFC 8414)
+4. Claude  → /api/oauth/authorize?client_id=<Claude ka https URL>&code_challenge=…
+             server Claude ka "ID card" (CIMD document) us URL se fetch karta hai — SSRF guard ke saath
+5. Browser → login (agar logged out) → consent screen: "Claude chahta hai: candidates:read" → Allow
+6. Browser → wapas Claude pe ek one-time code (60 second, ek hi baar chalega)
+7. Claude  → /api/oauth/token: code + code_verifier (PKCE) → access token (1 ghanta) + refresh token
+8. Claude  → POST /api/mcp + Bearer token → tools/list → recruiter bolta hai → tools/call list_campaigns
+9. Server  → token check (signature, issuer, audience) → scope check → sirf usi recruiter ka data → audit log
+```
+**Ek line mein:** "Discovery → client identity → login + consent → code → PKCE se token → har call pe token, scope aur ownership ka check."
+
+---
+
+### Kya banaya (asli numbers — sirf yahi bolo)
 | Cheez | Detail |
 |---|---|
-| Endpoint | `/api/mcp` — Next.js route, official TypeScript SDK v2 |
-| Protocol | Latest spec **2026-07-28** (stateless) + purane 2025 clients bhi chalte hain |
-| Tools | 8 — 4 read-only, 3 AI kaam (agent-service ke LangGraph agents chalate hain), 1 destructive (`book_interview`) |
-| Resources | 2 templates + 1 static policy doc, cache hints ke saath |
-| Prompts | 2, **autocomplete** ke saath (recruiter ke apne campaign names) |
-| Test | Official MCP client se **26-check contract test** — sab pass (local) |
+| MCP server | `/api/mcp`, Next.js, official TypeScript SDK v2, spec **2026-07-28** (stateless) + purane clients bhi chalte hain |
+| Tools | **8** — 4 read-only, 3 AI kaam (screen, rank, job result), 1 destructive (`book_interview`, hamesha confirm) |
+| Resources / Prompts | 2 resource templates + 1 policy doc; 2 prompts with autocomplete |
+| OAuth server | Apna — discovery, authorize, consent screen, token, register, revoke, "Connected AI apps" page |
+| Scopes | `candidates:read`, `screening:run`, `interviews:write` |
+| Tokens | Access token **1 ghanta**, refresh token **30 din** (har use pe naya), auth code **60 second** |
+| Python client | Official MCP Python SDK `mcp==2.3.0` |
+| Tests | Contract test **29 checks**, OAuth end-to-end **28 checks**, **7** client-pool tests, tool-selection eval **11 cases** |
+| CI | `mcp-e2e` job: asli Postgres + Next.js, har PR pe chalta hai |
+| Production | Live on AWS Amplify; **Claude Desktop se connect karke tool call chal gaya** |
+| Users | **Sirf main** (koi real recruiter abhi nahi) |
 
-### Concepts jo use kiye (har ek ka "kyun")
-| Concept | Kyun / kaise |
+---
+
+### Concepts — har ek ka "kyun" (simple)
+
+**MCP server side**
+| Concept | Simple matlab / kyun |
 |---|---|
-| **Stateless protocol (2026-07-28)** | Har request apni version + client info khud le ke aati hai, koi session nahi. Serverless (AWS Amplify) pe perfect — koi bhi instance koi bhi request le sakta hai |
-| **Tool annotations** | `readOnlyHint`, `destructiveHint`, `idempotentHint` — client ko pata chalta hai kaunsa tool khatarnak hai, wo extra confirmation maang sakta hai |
-| **Structured output** | Har tool ka `outputSchema` + `structuredContent` — AI ko text nahi, pakka JSON milta hai |
-| **Pagination** | Opaque cursor, deterministic order — badi lists ek baar mein nahi |
-| **Progress + cancellation** | AI screening ~10s: har graph step ka progress client ko jaata hai; client cancel kare to polling turant rukti hai |
-| **Job handles** | Lamba kaam (ranking, minutes) → tool turant ek handle deta hai, `get_job_result` se baad mein result. Ye naye spec ka recommended stateless tareeka hai |
-| **Scopes per tool** | `candidates:read`, `screening:run`, `interviews:write`. Read-only token se booking try → **403 insufficient_scope** → client sirf wahi extra permission maangta hai (incremental consent) |
-| **MRTR (Multi Round-Trip Requests)** | Naye spec mein server beech mein client se kuch "pooch" nahi sakta; wo `input_required` result lautata hai, client jawab le ke **wahi call dobara** bhejta hai |
-| **Elicitation (human confirmation)** | `book_interview` pehle recruiter se confirm karwata hai. 3 tarike, client ki capability dekh ke: **form**, **URL-mode**, aur purane clients ke liye **approval link** |
-| **Signed requestState** | MRTR ka state client ke through ghoomta hai, to use **HMAC se sign** kiya aur **user se bind** kiya — client badal nahi sakta, doosra user replay nahi kar sakta |
-| **No token passthrough** | Recruiter ka MCP token agent-service ko kabhi nahi jaata; wahan ke liye alag service token banta hai (confused-deputy attack se bachav) |
-| **Audience check** | Token sirf `…/api/mcp` ke liye maana jaata hai — kisi aur service ka token yahan nahi chalega |
-| **Security basics** | Origin header check (DNS rebinding), rate limit, har tool call ka audit log (arguments ka sirf hash), candidate emails masked |
+| **Stateless (2026-07-28)** | Har request apni info khud le ke aati hai, koi session nahi. Amplify pe koi bhi instance koi bhi request le sakta hai |
+| **Tool annotations** | `readOnlyHint`, `destructiveHint` — Claude ne inhi se tools ko "Read-only (7)" aur "Write (1)" mein baanta, aur booking pe "Needs approval" lagaya |
+| **Structured output** | Har tool ka `outputSchema` — AI ko pakka JSON milta hai, andaaza nahi |
+| **Job handle** | Ranking minutes leti hai → tool turant handle deta hai, `get_job_result` se baad mein result |
+| **Progress + cancel** | Screening ke har step ka progress jaata hai; user cancel kare to turant rukta hai |
+| **MRTR + elicitation** | Server beech mein "confirm karo?" poochta hai — `input_required` lautata hai, client jawab ke saath wahi call dobara bhejta hai |
+| **Approval link** | Purane clients ke liye: recruiter browser mein Approve dabata hai, booking wahi hoti hai |
+| **Signed requestState** | Beech ka state client ke paas ghoomta hai, isliye HMAC se sign aur user se bind — badla ya doosre user se replay nahi ho sakta |
 
-### Sabse achhi kahani — "approval link" kyun bana
-- **Kya hua:** contract test mein purane (2025) client se booking pe error aaya — *"cannot request input: per-request legacy serving cannot receive server-to-client requests"*.
-- **Kyun:** purane protocol mein server ko beech mein client se poochne ke liye **session** chahiye, aur hum stateless hain. Aur aaj bhi kai clients (Claude Desktop) purane protocol pe hain.
-- **Kya kiya:** aise clients ko tool ek **approval link** deta hai. Recruiter browser mein login karke "Approve" dabata hai — **booking wahi hoti hai, AI ke kehne se nahi**. AI dobara poochhe to "already booked".
-- **Kyun ye form se bhi safe hai:** form ka jawab client deta hai (theory mein AI bhi bhar sakta hai); approval button sirf recruiter ke logged-in browser mein hai.
-- **Achhi baat:** galti safe tareeke se fail hui — booking hui hi nahi, saaf error aaya.
+**OAuth side (login ka system)**
+| Concept | Simple matlab / kyun |
+|---|---|
+| **OAuth 2.1** | "Password diye bina permission dena." Claude ko kabhi recruiter ka password nahi milta, sirf ek limited token |
+| **PKCE (S256)** | Claude ek secret banata hai, uska hash pehle bhejta hai, secret baad mein. Agar koi beech mein code chura le to bhi bina secret ke token nahi milega |
+| **Discovery (RFC 9728 / 8414)** | Claude ko kuch configure nahi karna pada — sirf URL diya, baaki usne `.well-known` se khud dhoondh liya (screen pe "Detected" aaya) |
+| **CIMD** | Client ka "ID card" ek https URL pe hota hai; `client_id` wahi URL hai. Pehle se register karne ki zaroorat nahi. Claude ne yahi use kiya |
+| **DCR** | Purana tareeka — client aake khud register karta hai. Deprecated hai, purane clients ke liye rakha |
+| **SSRF guard** | CIMD mein server ek URL fetch karta hai — to sirf https, sirf public IP, redirect nahi, 5s timeout, 10KB limit. Warna koi `client_id` mein internal URL daal ke server se andar ki cheezein fetch karwa sakta tha |
+| **Consent screen** | Recruiter dekhta hai kaun sa app, token kahan jaayega, kya permission — phir Allow/Deny. Candidate role ko mana |
+| **Audience (RFC 8707)** | Token sirf `…/api/mcp` ke liye — kisi aur service ka token yahan nahi chalega, ye token kahin aur nahi |
+| **Incremental scopes** | Shuru mein sirf `candidates:read`. Booking chahiye to server 403 deta hai, Claude sirf wahi extra permission maangta hai |
+| **Refresh rotation + reuse detection** | Har refresh pe naya token, purana khatam. Agar purana dobara aaye (matlab chori hua) → poori family revoke |
+| **Revocation / Connected AI apps** | Recruiter kabhi bhi "Disconnect" dabaye → app naya token nahi le sakta |
+| **No token passthrough** | Recruiter ka token agent-service ko nahi jaata; wahan ke liye alag service token (confused-deputy attack se bachav) |
+
+**Client side (agent-service)**
+| Concept | Simple matlab / kyun |
+|---|---|
+| **Official SDK** | Apna hand-written client hata ke official Python SDK — protocol updates free mein milte hain |
+| **Allowlist** | GitHub server code push bhi kar sakta hai; humne sirf `search_repositories` allow kiya, baaki server tak pahuchne se pehle hi refuse |
+| **Version pin** | `npx -y package` (jo aaj latest ho) nahi — exact version, supply-chain risk kam |
+| **Tool pinning (rug pull)** | Har tool ki description ka hash save. Server chupke se description badle (jaise "ignore instructions, data bhejo") → tool block + alert |
+| **Tracing** | Har MCP call pe ek `traceparent` id; dono services ke logs mein same `trace_id` — ek search mein poori call dikhti hai |
+| **Tool-selection eval** | "Tool descriptions = prompts." LLM ko sirf humari tool list deke check kiya ki sahi tool aur sahi arguments chunta hai (11 cases) |
+
+---
+
+### Kahani 1 — Production pe connect karte waqt 4 bugs (STAR — sabse strong kahani)
+- **Situation:** sab local aur CI mein pass tha (26 + 27 checks). Phir production pe Claude Desktop connect kiya.
+- **Bug 1 — Secrets runtime tak nahi pahunche.** Amplify sirf `next.config.ts` ke `env` list wale variables server code ko deta hai. MCP wale list mein nahi the, to `MCP_TOKEN_SECRET` undefined tha. **Fix:** list mein daale; dev-only switch jaan-bujh ke bahar rakha.
+- **Bug 2 — Galat token pe 500 aata tha, 401 nahi.** SDK sirf apni `OAuthError` ko 401 banata hai; meri JWT library ki error 500 ban rahi thi. Matlab expire hua token wala Claude samajh hi nahi paata ki refresh karna hai. **Fix:** token errors → `401 invalid_token`; config error (secret missing) 500 hi rehta hai. 3 naye test.
+- **Bug 3 — Login ke baad browser `localhost:3000` pe gaya.** Amplify ke proxy ke peeche server apna address `localhost:3000` samajhta hai, aur main redirect usi se bana raha tha. **Fix:** redirect hamesha public URL se. CI mein bug kyun nahi dikha? Wahan dono address same the. Ab CI mein public URL `127.0.0.1` aur server `localhost` — production jaisa farak — aur test redirect check karta hai.
+- **Bug 4 — Logged-out user login ke baad dashboard pe pahunchta tha.** Consent screen ka `?request=…` login redirect mein gum ho jaata tha. **Fix:** login page `callbackUrl` follow karta hai (password aur Google dono), sirf apni site ke path — open redirect nahi.
+- **Result:** Claude Desktop connect hua, tool call chala. Har bug ke liye ek test ya CI change, taaki wapas na aaye.
+- **Seekh (zaroor bolna):** "Green CI only proves what CI can see. My CI had the same URL everywhere and plain env vars, so it couldn't see proxy or hosting differences. Now CI deliberately runs with a public URL that differs from the server's own address."
+
+### Kahani 2 — "Approval link" kyun bana
+- **Kya hua:** test mein purane (2025) client se booking pe error — *"cannot receive server-to-client requests"*.
+- **Kyun:** purane protocol mein server ko beech mein poochne ke liye session chahiye, aur hum stateless hain.
+- **Kya kiya:** aise clients ko tool ek **approval link** deta hai. Recruiter apne logged-in browser mein Approve dabata hai — **booking wahi hoti hai, AI ke kehne se nahi**. Dobara poochhe to "already booked".
+- **Kyun safe:** form ka jawab client deta hai (theory mein AI bhar sakta hai); approval button sirf recruiter ke browser mein hai.
+
+### Kahani 3 — Claude ne tool hi nahi chalaya (tool descriptions = prompts)
+- **Kya hua:** Claude Desktop mein poocha "mere interview campaigns kaun se hain?" → Claude ne tool nahi chalaya, apni **memory** se meri khud ki job interviews bata di.
+- **Kyun:** same shabd, do matlab. Model ne context dekh ke galat source chuna. Server bilkul theek tha.
+- **Kya kiya:** "Resume-AI se mere hiring campaigns" pucha → tool chala. Seekh: tool ka naam aur description hi model ka prompt hai — isliye tool-selection eval banaya, aur description ko aur saaf karna next step hai.
 
 ### Ek imaandar seekh (poochein to bolo)
-> "In my first test run an email actually went out — I'd restarted the dev server with SMTP disabled, but the restart failed and the old server, with SMTP on, kept serving. It went to a reserved example.com address, so it reached no one, but it taught me two things: verify the process you think you're testing, and make side effects explicit — I added an `MCP_SEND_EMAILS=false` dry-run switch, and the contract test now asserts no email left the server."
+> "In my first local test an email actually went out. I'd restarted the dev server with SMTP disabled, but the restart failed and the old server kept serving. It went to a reserved example.com address, so it reached no one. It taught me to verify the process I think I'm testing, and to make side effects explicit: I added an `MCP_SEND_EMAILS=false` dry-run switch, and the test asserts no email left the server."
+
+---
+
+### Live demo (interview mein 3 minute)
+1. Claude Desktop → Settings → Connectors → Resume-AI dikhao: tools "Read-only" aur "Write" mein bate hue (annotations).
+2. Chat: "Resume-AI se mere hiring campaigns list karo" → tool call dikhao.
+3. "Is campaign ke candidates dikhao" → emails masked dikhao (`a***@…`) — "PII kam se kam".
+4. "Pehle candidate ko slot me book karo" → confirmation aata hai → **Decline** → "kuch book nahi hua".
+5. Resume-AI → Settings → **Connected AI apps** → Claude listed, **Disconnect** button dikhao.
+6. Bonus: GitHub pe `mcp-e2e` CI job ka green log.
+
+**Demo se pehle:** campaign mein data ho (kam se kam ek completed interview), aur booking sirf apne email wale test candidate pe.
+
+---
 
 ### Kya ABHI baaki hai (yeh zaroor pata ho)
-- **Apna OAuth 2.1 server** (login, consent screen, PKCE, Client ID Metadata Documents) — abhi testing dev-token script se hoti hai. **Iske bina Claude Desktop se connect nahi hota.**
-- `subscriptions/listen` (live updates), Python agent-service ko official MCP client pe le jaana, CI mein contract test, OpenTelemetry tracing.
-- Production deploy abhi nahi hua — sab local pe test hua hai.
+- **Real users nahi:** sirf maine use kiya hai. Usage ya impact claim mat karna.
+- `subscriptions/listen` (live updates) aur tasks extension (job handle polling ki jagah) — phase 5.
+- Per-client rate limit aur audit logs pe anomaly alerts — phase 7. Abhi rate limit IP pe hai (120/min).
+- Production mein booking confirmation Claude Desktop ke saath abhi tak end-to-end test nahi kiya — local tests mein teeno tarike pass hain.
+- MCP Registry pe publish nahi kiya (sirf `server.json` ready hai).
+
+---
 
 ### Counter questions
+
 **Q: MCP aur normal REST API mein kya farak hai?**
-> "REST is built for a specific frontend. MCP is a standard for AI clients: the client discovers tools at runtime, gets JSON Schemas and annotations so the model knows how and when to call them, and the protocol has AI-specific pieces — asking the user mid-call, progress, scopes the client can request on demand. Any MCP host can use my server without custom code."
+> "REST is built for a specific frontend. MCP is a standard for AI clients. The client discovers tools at runtime and gets JSON Schemas and annotations, so the model knows how and when to call them. The protocol also has AI-specific pieces: asking the user mid-call, progress, scopes requested on demand. Any MCP host can use my server without custom code."
 
-**Q: AI khud booking approve kar de to?**
-> "It can't. book_interview is marked destructive, needs the `interviews:write` scope, and always asks for a human confirmation. For older clients the confirmation is an approval link that only works in the recruiter's logged-in browser — the booking happens there, not in the tool."
+**Q: Auth0 / Clerk kyun nahi, apna OAuth server kyun?**
+> "I wanted the recruiter's identity to stay in the existing NextAuth login, and MCP needs specific pieces some providers don't fully support yet: CIMD clients, the resource indicator and audience, and protected-resource metadata. Building it taught me every step. In a bigger company I'd likely use a managed authorization server and keep my resource server the same."
 
-**Q: Sampling kyun use nahi kiya?**
-> "Sampling is deprecated in the 2026-07-28 spec — the guidance is to call the model provider directly. My server calls its own LLM through agent-service, so it doesn't need to borrow the client's model."
+**Q: PKCE kyun? Client secret kyun nahi?**
+> "Claude Desktop is a public client: any secret shipped in the app can be extracted. With PKCE, every login makes a one-time secret, and only its hash goes in the first step. A stolen authorization code is useless without that secret. OAuth 2.1 makes PKCE mandatory, and I only accept S256."
 
-**Q: Roots / Logging?**
-> "Both deprecated in 2026-07-28. My server works on campaign and candidate ids passed as tool arguments, not file-system roots; and for logs I use structured audit lines and tracing instead of MCP logging."
+**Q: CIMD vs DCR?**
+> "With DCR every client registers itself, so a busy server collects thousands of throwaway registrations, and the name is self-asserted. With CIMD the client_id is an https URL hosting the client's metadata. The server fetches it, and the domain itself is the identity. I support both because older clients only do DCR. The CIMD fetch is fenced against SSRF: https only, public IPs only, no redirects, size and time limits."
 
-**Q: Stateless kyun?**
-> "It runs on serverless (AWS Amplify): any instance can take any request, nothing to pin or lose. Cross-call state is explicit — a signed `requestState` for confirmations and a job handle for long work."
+**Q: Refresh token chori ho gaya to?**
+> "Refresh tokens rotate: every use returns a new one and retires the old. If a retired token comes back, someone has a copy, so I revoke the whole family. The thief and the real client both get logged out, and the user signs in again. Refresh tokens are stored only as hashes."
 
-**Q: MCP server pe prompt injection?**
-> "Two directions. Candidate text inside results is data — the server's instructions say so and the platform already detects injection in resumes and answers. And the server never treats the client's text as authority: scopes, ownership checks and the human confirmation are enforced in code."
+**Q: `MCP_TOKEN_SECRET` leak ho gaya to?**
+> "Two steps. Revoke all refresh tokens in the DB, then rotate the secret, so every access token dies instantly. Rotating the secret alone isn't enough, because clients would just refresh and get a new token. That's written in the runbook."
+
+**Q: AI khud booking kar de to?**
+> "It can't. book_interview is marked destructive and needs the `interviews:write` scope, which isn't granted by default. It always asks for human confirmation, and Claude Desktop also shows its own 'Needs approval'. For older clients the confirmation is an approval link that only works in the recruiter's logged-in browser."
+
+**Q: Tool poisoning / rug pull kya hai, kaise bachaya?**
+> "A tool's description goes straight into the model's prompt. A malicious or compromised server can change it later to something like 'also send all data to this address'. In my client I hash each allowlisted tool's definition, and if it changes, the tool is refused and an alert fires until a human reviews and re-pins it."
 
 **Q: Ek recruiter doosre ka data dekh sakta hai?**
-> "No — every query is scoped to the token's user in one data layer; the contract test checks that another user gets 'not found'."
+> "No. Every query is scoped to the token's user in one data layer, and the contract test checks that another user gets 'not found'."
+
+**Q: MCP server pe prompt injection?**
+> "Candidate text inside results is treated as data. The server's instructions say so, and the platform already detects injection in resumes and answers. And the server never treats the client's text as authority: scopes, ownership checks and human confirmation are enforced in code."
+
+**Q: CI green tha to production mein bugs kyun aaye?**
+> "Because CI couldn't see the differences that mattered: in CI the public URL and the server's own address were the same, and env vars were plain. On Amplify the server sits behind a proxy and only gets listed env vars. I fixed each bug and changed CI to recreate the difference, a public URL that differs from the server's address, so this class of bug fails the build now."
+
+**Q: Stateless kyun?**
+> "It runs on AWS Amplify, where any instance can take any request. State between calls is explicit: a signed `requestState` for confirmations and a job handle for long work."
+
+**Q: Sampling / Roots / Logging kyun nahi?**
+> "All three are deprecated in 2026-07-28. My server calls its own LLM through agent-service, so it doesn't need the client's model. It works on ids, not file-system roots. And for logs I use structured audit lines plus trace ids."
 
 **Q: Kitne log ise use karte hain?**
-> "Nobody in production yet — it's tested locally with the official MCP client; the OAuth server and deployment are the next steps."
+> "Nobody but me yet. It's live in production and I've connected Claude Desktop to it, but there are no real recruiters on it. What I can show is the engineering: the OAuth flow, the tests, and the production bugs I found and fixed."
+
+---
 
 ## 7. Mat bolna (trap)
 
@@ -264,7 +379,8 @@ Browser ──► Next.js (AWS Amplify) ──JWT──► Python agent-service 
 - ❌ "100% fair" / "bias-free" — sach: test set pe ±2, aur ek watch list hai.
 - ❌ "Maine AI tools use nahi kiye" — agar kiye hain to maano, aur bolo ki faisle tumhare the.
 - ❌ "Railway pe deployed" — agent-service **Render** pe hai, frontend **AWS Amplify** pe, DB **Neon**.
-- ❌ "Claude Desktop se connected hai" / "MCP production mein hai" — sach: local pe tested, OAuth aur deploy baaki.
+- ❌ "Recruiters MCP use karte hain" / "AI apps se X% kaam hota hai" — sach: MCP production mein live hai aur Claude Desktop se connect kiya, lekin **sirf maine** use kiya hai.
+- ❌ "Booking Claude Desktop se production mein test ki" — jab tak khud karke na dekho, mat bolna.
 - ❌ Koi number jo is file mein nahi hai.
 
 ---
@@ -275,5 +391,5 @@ Browser ──► Next.js (AWS Amplify) ──JWT──► Python agent-service 
 2. Architecture diagram ek kaagaz pe banao (section 2).
 3. Teen kahaniyan (section 4) — har ek 1 minute mein.
 4. Section 6 mein se ye 5 pakke karo: scale, ownership, AgentCore kyun, fairness, kamzoriyan.
-4b. Section 6.5 (MCP): "MCP kya hai", approval link wali kahani, aur "kya baaki hai" — teeno pakke karo.
+4b. Section 6.5 (MCP): "MCP kya hai", **poora flow (9 steps)**, **4 production bugs wali kahani**, PKCE + CIMD ek-ek line mein, aur "kya baaki hai".
 5. Code mein ek baar dekh lo: `agent-service/core/observability.py` (`run_agent`), `agent-service/agents/code_assessment/nodes.py`, `agent-service/evals/run_evals.py`.
